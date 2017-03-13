@@ -1,14 +1,19 @@
 package com.example.plasma.alexa;
 
 import android.app.Activity;
+import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.View.OnClickListener;
+import android.view.View.OnFocusChangeListener;
+import android.view.View.OnTouchListener;
 import android.view.inputmethod.InputConnectionWrapper;
 import android.widget.Button;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONException;
@@ -28,13 +33,17 @@ import com.example.alexa.lib.TokenListener;
 
 
 public class MainActivity extends Activity {
-  private static final String TAG = "ALEXA";
+  private static final String TAG = "MainActivity";
   private static final Scope ALEXA_ALL_SCOPE = ScopeFactory.scopeNamed("alexa:all");
   private RequestContext mRequestContext;
   private static final String PRODUCT_ID = "my_device";
   private static final String PRODUCT_DSN = "123456";
   private Button mLoginButton;
+  private Button mVoiceButton;
   private Context mContext;
+  private PlasmaService plasmaService;
+  private TextView serviceStatus;
+
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -51,7 +60,6 @@ public class MainActivity extends Activity {
       public void onClick(View v) {
         final JSONObject scopeData = new JSONObject();
         final JSONObject productInstanceAttributes = new JSONObject();
-
         try {
           productInstanceAttributes.put("deviceSerialNumber", PRODUCT_DSN);
           scopeData.put("productInstanceAttributes", productInstanceAttributes);
@@ -61,13 +69,34 @@ public class MainActivity extends Activity {
               .addScope(ScopeFactory.scopeNamed("alexa:all", scopeData))
               .forGrantType(AuthorizeRequest.GrantType.ACCESS_TOKEN).shouldReturnUserData(false)
               .build());
-
         } catch (JSONException e) {
-          // handle exception here
           Log.i(TAG, "plasma018 errors:" + e);
         }
       }
+
     });
+    serviceStatus = (TextView) findViewById(R.id.status);
+    mVoiceButton = (Button) findViewById(R.id.microphone_button);
+    mVoiceButton.setOnTouchListener(new OnTouchListener() {
+      @Override
+      public boolean onTouch(View v, MotionEvent event) {
+        switch (event.getAction()) {
+          case MotionEvent.ACTION_UP:
+            Log.i(TAG, "MotionEvent.ACTION_UP");
+            serviceStatus.setText(R.string.thinking);
+            plasmaService.StopRecordVoice();
+            break;
+          case MotionEvent.ACTION_DOWN:
+            Log.i(TAG, "MotionEvent.ACTION_DOWN");
+            serviceStatus.setVisibility(View.VISIBLE);
+            plasmaService.RecordVoice();
+            break;
+        }
+        return false;
+      }
+    });
+    mVoiceButton.setEnabled(false);
+    App.setMainActivity(this);
   }
 
   @Override
@@ -80,13 +109,35 @@ public class MainActivity extends Activity {
   protected void onStart() {
     super.onStart();
     AuthorizationManager.getToken(this, new Scope[] {ALEXA_ALL_SCOPE}, new TokenListener());
+  }
 
+  @Override
+  protected void onStop() {
+    super.onStop();
+  }
 
+  @Override
+  protected void onDestroy() {
+    super.onDestroy();
+    Intent intent = new Intent(MainActivity.this, PlasmaService.class);
+    stopService(intent);
   }
 
 
-  private class AuthorizeListenerImpl extends AuthorizeListener {
+  public void setService(PlasmaService service) {
+    plasmaService = service;
+  }
 
+  public void setStatusGone() {
+    runOnUiThread(new Runnable() {
+      @Override
+      public void run() {
+        serviceStatus.setVisibility(View.INVISIBLE);
+      }
+    });
+  }
+
+  private class AuthorizeListenerImpl extends AuthorizeListener {
     /* Authorization was completed successfully. */
     @Override
     public void onSuccess(final AuthorizeResult authorizeResult) {
@@ -94,9 +145,16 @@ public class MainActivity extends Activity {
           new TokenListener());
       Log.i(TAG, "plasma018 onSuccess: " + authorizeResult.getAccessToken());
       if (authorizeResult.getAccessToken() != null) {
-        Intent intent = new Intent(MainActivity.this, VoiceClientActivity.class);
+        Intent intent = new Intent(MainActivity.this, PlasmaService.class);
         intent.putExtra("token", authorizeResult.getAccessToken());
-        startActivity(intent);
+        intent.setAction();
+        startService(intent);
+        runOnUiThread(new Runnable() {
+          @Override
+          public void run() {
+            mVoiceButton.setEnabled(true);
+          }
+        });
       }
     }
 

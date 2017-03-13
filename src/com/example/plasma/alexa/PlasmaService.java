@@ -1,11 +1,7 @@
 package com.example.plasma.alexa;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -13,141 +9,142 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.KeyManagementException;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.nio.ByteBuffer;
 import java.util.concurrent.TimeUnit;
 
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.TrustManagerFactory;
-import javax.net.ssl.X509TrustManager;
-
-
-
 import com.amazon.alexa.avs.http.HttpHeaders;
-import com.amazon.alexa.setting.LocaleSetting;
-import com.amazon.alexa.setting.Setting;
-import com.amazon.alexa.setting.SettingEvent;
-import com.amazon.alexa.speaker.SpeakerDirective;
-import com.amazon.alexa.speaker.SpeakerEvent;
-import com.example.alexa.lib.ResponseParser;
-import com.google.gson.Gson;
 
+import com.example.alexa.lib.ResponseParser;
+
+import com.example.plasma.alexa.VoiceClientActivity.RecordTask;
+
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
+import android.media.MediaCodec;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
+import android.media.MediaCodec.BufferInfo;
 import android.net.Uri;
 import android.os.AsyncTask;
-import android.os.Build;
-import android.os.Bundle;
+import android.os.IBinder;
 import android.util.Log;
-import android.view.MotionEvent;
-import android.view.View;
-import android.widget.Button;
-import android.widget.ImageButton;
+import javazoom.jl.decoder.Bitstream;
+import javazoom.jl.decoder.BitstreamException;
+import javazoom.jl.decoder.Decoder;
+import javazoom.jl.decoder.DecoderException;
+import javazoom.jl.decoder.Header;
+import javazoom.jl.decoder.SampleBuffer;
+import android.media.MediaFormat;
 import okhttp3.Call;
 import okhttp3.Callback;
-import okhttp3.ConnectionSpec;
-import okhttp3.Headers;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import okhttp3.RequestBody;
 import okhttp3.Response;
-import okhttp3.TlsVersion;
-import okio.Buffer;
-import okio.BufferedSource;
 
 
-
-
-public class VoiceClientActivity extends Activity {
-
-  private OkHttpClient client = new OkHttpClient();
+@SuppressLint("Instantiatable")
+public class PlasmaService extends Service {
+  private static final String TAG = "PlasmaService";
+  private Context mApplicationContext;
+  private MainActivity mainActivity;
+  private OkHttpClient downChannelClient;
   public static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-  private String token;
-  private byte[] fileBytes;
-  private Button startBty;
-  private Button stopBty;
-  private Button playBty;
-  private Button finishBty;
-  private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
-  MediaPlayer mPlayer;
 
+  private String loginToken;
+  private String url;
+  private static int number = 0;
 
-  // audioRecoder parameter
+  // 錄音程式的資訊
   private static final int RECORDER_SAMPLERATE = 16000;
   private static final int RECORDER_CHANNELS = AudioFormat.CHANNEL_IN_MONO;
   private static final int RECORDER_AUDIO_ENCODING = AudioFormat.ENCODING_PCM_16BIT;
   private RecordTask recorderTask = null;
   private boolean isRecording = false;
 
+  private MediaPlayer mPlayer;
 
+  // 播放聲音的資訊
+  private MediaCodec codec;
+  private MediaExtractor extractor;
+  private MediaFormat format;
+  private ByteBuffer[] codecInputBuffers;
+  private ByteBuffer[] codecOutputBuffers;
+  private Boolean sawInputEOS = false;
+  private Boolean sawOutputEOS = false;
+  private boolean isPlaying = false;
+  private AudioTrack mAudioTrack;
+  private BufferInfo info;
+
+  private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
   private ByteArrayOutputStream dos;
 
+  @Override
+  public IBinder onBind(Intent intent) {
+    return null;
+  }
 
   @Override
-  protected void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
-    setContentView(R.layout.voice_layout);
-    startBty = (Button) findViewById(R.id.startBty);
-    stopBty = (Button) findViewById(R.id.stopBty);
-    playBty = (Button) findViewById(R.id.playBty);
-    finishBty = (Button) findViewById(R.id.finishBty);
-
-    // try {
-    // ProviderInstaller.installIfNeeded(getApplicationContext());
-    // } catch (GooglePlayServicesRepairableException e) {
-    // e.printStackTrace();
-    // } catch (GooglePlayServicesNotAvailableException e) {
-    // e.printStackTrace();
-    // }
-
-    // try {
-    // InputStream is = getAssets().open("weather.raw");
-    // fileBytes = new byte[is.available()];
-    // is.read(fileBytes);
-    // } catch (FileNotFoundException e1) {
-    // e1.printStackTrace();
-    // } catch (IOException e) {
-    // e.printStackTrace();
-    // }
-
-
+  public void onCreate() {
+    super.onCreate();
+    Log.i(TAG, TAG + " onCreate");
+    init();
 
   }
 
-
-  public void mediaPlay() {
-    MediaPlayer mPlayer = MediaPlayer.create(VoiceClientActivity.this,
-        Uri.parse("data/data/com.example.plasma.alexa/joke"));
-    mPlayer.start();
+  @Override
+  public int onStartCommand(Intent intent, int flags, int startId) {
+    Log.i(TAG, TAG + " onStartCommand--> " + intent);
+    int ret = super.onStartCommand(intent, flags, startId);
+    String action = intent.getAction();
+    switch (action) {
+      case App.ServiceAction.startService:
+        loginToken = intent.getStringExtra("token");
+        Log.i(TAG, TAG + "token: " + loginToken);
+        startService();
+        break;
+      default:
+        Log.i(TAG, TAG + "onStartCommand default nothing to say");
+        break;
+    }
+    return ret;
   }
 
-  public void mediaStop() {
+  @Override
+  public void onDestroy() {
+    super.onDestroy();
+    Log.i(TAG, TAG + " onDestroy");
     mPlayer.stop();
   }
 
-  @Override
-  protected void onDestroy() {
-    super.onDestroy();
-    mediaStop();
+  private void init() {
+    mApplicationContext = getApplicationContext();
+    mainActivity = App.getMainActivity();
+    mainActivity.setService(this);
   }
 
+  public void RecordVoice() {
+    recorderTask = new RecordTask();
+    recorderTask.execute();
+  }
+
+  public void StopRecordVoice() {
+    this.isRecording = false;
+    sendMessage();
+  }
 
 
   class RecordTask extends AsyncTask<Void, Integer, Void> {
@@ -174,14 +171,10 @@ public class VoiceClientActivity extends Activity {
             dos.write(buffer[i]);
           }
         }
-
         record.stop();
-        Log.v("The DOS available:", "::" + audioFile.length());
-
-
-
       } catch (Exception e) {
-        // TODO: handle exception
+        Log.i(TAG, TAG + " RecordTask error");
+        e.printStackTrace();
       }
       return null;
     }
@@ -191,86 +184,77 @@ public class VoiceClientActivity extends Activity {
       // stateView.setText(progress[0].toString());
     }
 
-    protected void onPostExecute(Void result) {
-      stopBty.setEnabled(false);
-      startBty.setEnabled(true);
-      // btnPlay.setEnabled(true);
-      // btnFinish.setEnabled(false);
-    }
+    protected void onPostExecute(Void result) {}
 
-    protected void onPreExecute() {
-      // stateView.setText("正在录制");
-      startBty.setEnabled(false);
-      // btnPlay.setEnabled(false);
-      // btnFinish.setEnabled(false);
-      stopBty.setEnabled(true);
-    }
+    protected void onPreExecute() {}
 
   }
 
+  //
+  private void startService() {
+    new Thread() {
+      @Override
+      public void run() {
+        try {
 
-  public void onClick(View v) {
-    int id = v.getId();
-    switch (id) {
-      case R.id.startBty:
-        // 开始录制
-        Log.i("plasma018", "plasma018: startBty");
-        // 这里启动录制任务
-        recorderTask = new RecordTask();
-        recorderTask.execute();
+          OkHttpClient.Builder clientBuilder =
+              new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS);
 
-        break;
-      case R.id.stopBty:
-        // 停止录制
-        this.isRecording = false;
-        // 更新状态
-        // 在录制完成时设置，在RecordTask的onPostExecute中完成
-        Log.i("plasma018", "plasma018: stopBty");
-        break;
-      case R.id.playBty:
-        Log.i("plasma018", "plasma018: sendMessage()");
-        sendMessage();
-        startBty.setEnabled(false);
-        playBty.setEnabled(false);
-        finishBty.setEnabled(true);
-        stopBty.setEnabled(false);
-        // player = new PlayTask();
-        // player.execute();
-        break;
-      case R.id.finishBty:
-        startBty.setEnabled(true);
-        playBty.setEnabled(true);
-        finishBty.setEnabled(true);
-        stopBty.setEnabled(true);
-        // 完成播放
-        // this.isPlaying = false;
-        break;
+          downChannelClient = clientBuilder.build();
+          Request downChannelRequest = new Request.Builder().get()
+              .url("https://avs-alexa-na.amazon.com/v20160207/directives")
+              .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
+          Response downChannelResponse;
+          downChannelResponse = downChannelClient.newCall(downChannelRequest).execute();
+          Log.i(TAG, "start downChannel  code:" + downChannelResponse.code());
+          Log.i(TAG, "start downChannel headers: " + downChannelResponse.headers());
 
-    }
+          MultipartBody mBody = null;
+          Request.Builder syncRequestBuilder =
+              new Request.Builder().url("https://avs-alexa-na.amazon.com/v20160207/events")
+                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
+                  .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
+                  .method("POST", mBody);
+
+          mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
+              .addFormDataPart("name", "metadata",
+                  okhttp3.RequestBody.create(MediaType.parse("application/json; charset=UTF-8"),
+                      JSONTest.synchronizeStateEvent()))
+              .build();
+
+          Request syncRequest = syncRequestBuilder.build();
+          Log.i(TAG, "syncRequest: " + syncRequest.toString());
+          Response syncResponse = downChannelClient.newCall(syncRequest).execute();
+          Log.i(TAG, "syncResponse code:" + syncResponse.code());
+          Log.i(TAG, "syncResponse headers: " + syncResponse.headers());
+          Log.i(TAG, "syncResponse body: " + syncResponse.body().string());
+          syncResponse.close();
+
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
+    }.start();
   }
 
-
-
-  // ================ sendMessage() ===================================>
 
   private void sendMessage() {
     new Thread() {
       @Override
       public void run() {
         try {
-
-
-          token = getIntent().getStringExtra("token");
+          // InputStream in = getAssets().open("weather.raw");
+          // int byteCount = in.available();
+          // byte[] buff = new byte[byteCount];
+          // in.read(buff, 0, byteCount);
 
           OkHttpClient.Builder clientBuilder =
               new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS);
-
-          OkHttpClient downChannelClient = clientBuilder.build();
-
+          downChannelClient = clientBuilder.build();
 
           Request request = new Request.Builder().get()
               .url("https://avs-alexa-na.amazon.com/v20160207/directives")
-              .header(HttpHeaders.AUTHORIZATION, "Bearer " + token).build();
+              .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
           Response response = downChannelClient.newCall(request).execute();
           Log.i("plasma018", "plasma018 code:" + response.code());
           Log.i("plasma018", "plasma018 headers: " + response.headers());
@@ -279,7 +263,7 @@ public class VoiceClientActivity extends Activity {
           MultipartBody mBody = null;
           Request.Builder request2 =
               new Request.Builder().url("https://avs-alexa-na.amazon.com/v20160207/events")
-                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
                   .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__");
 
           mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
@@ -298,11 +282,9 @@ public class VoiceClientActivity extends Activity {
           Log.i("plasma018", "plasm0a18 response2 body: " + response2.body().string());
           response2.close();
 
-
-
           Request.Builder request_audio =
               new Request.Builder().url("https://avs-alexa-na.amazon.com/v20160207/events")
-                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
                   .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__");
           MultipartBody mBody_audio = null;
           mBody_audio = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
@@ -316,14 +298,12 @@ public class VoiceClientActivity extends Activity {
 
           request_audio.method("POST", mBody_audio);
           Request requestAudio = request_audio.build();
-
+          OkHttpClient client = new OkHttpClient();
           client.newCall(requestAudio).enqueue(new Callback() {
-            private OutputStream outs;
-            private int numRead;
-
             @Override
             public void onResponse(Call arg0, Response arg1) throws IOException {
               Log.i("plasma018", "plasma018 responseAudio code:" + arg1.code());
+              mainActivity.setStatusGone();
               if (arg1.code() == 200) {
                 String boundary = arg1.headers().get("content-type").split(";")[1].substring(9);
                 Log.i("plasma018", "plasma018 responseAudio boundary: " + boundary);
@@ -341,15 +321,6 @@ public class VoiceClientActivity extends Activity {
           Log.i("plasma018", "MalformedURLException: " + e);
           e.printStackTrace();
         } catch (IOException e) {
-          try {
-            FileOutputStream text = new FileOutputStream("data/data/com.example.plasma.alexa/joke");
-            text.write(e.toString().getBytes());
-            Log.i("plasma018", "test: " + e.toString());
-          } catch (FileNotFoundException e1) {
-            e1.printStackTrace();
-          } catch (IOException e1) {
-            e1.printStackTrace();
-          }
 
           Log.i("plasma018", "IOException: " + e);
           e.printStackTrace();
@@ -358,6 +329,8 @@ public class VoiceClientActivity extends Activity {
     }.start();
   }
 
+  public void mediaPlay() {
+    mPlayer = MediaPlayer.create(this, Uri.parse("/sdcard/voice.mp3"));
+    mPlayer.start();
+  }
 }
-
-

@@ -4,5 +4,8 @@
     <string name="app_name">alexa</string>
     <string name="hello_world">Hello world!</string>
     <string name="action_settings">Settings</string>
+    <string name="login">login</string>
+    <string name="thinking">thinking</string>
+    <string name="listening">listening</string>
 
 </resources>

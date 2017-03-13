@@ -11,11 +11,16 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.Arrays;
 
 import org.apache.commons.fileupload.MultipartStream;
-
+import org.apache.commons.io.IOUtils;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -29,23 +34,33 @@ import android.app.Activity;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.media.MediaCodec;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.media.AudioTrack.OnPlaybackPositionUpdateListener;
+import android.media.MediaCodec.BufferInfo;
 import android.media.MediaPlayer;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Environment;
 import android.util.Log;
+import javazoom.jl.decoder.Bitstream;
+import javazoom.jl.decoder.BitstreamException;
+import javazoom.jl.decoder.Decoder;
+import javazoom.jl.decoder.DecoderException;
+import javazoom.jl.decoder.Header;
+import javazoom.jl.decoder.SampleBuffer;
 
 
 public class ResponseParser {
   private static final String TAG = "ResponseParser";
-  private static InputStream fin;
-  private static File file = new File("data/data/com.example.plasma.alexa/joke");
-  private static int minBufferSize = AudioTrack.getMinBufferSize(8000,
-      AudioFormat.CHANNEL_CONFIGURATION_MONO, AudioFormat.ENCODING_PCM_16BIT);
-  private static int bufferSize = 1024;
-  private static AudioTrack at =
-      new AudioTrack(AudioManager.STREAM_MUSIC, 8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
-          AudioFormat.ENCODING_PCM_16BIT, minBufferSize, AudioTrack.MODE_STATIC);
+  private static File file = new File("/sdcard/voice.mp3");
+
+
+  // 播放聲音的資訊
+  private static int sampleRate = 44100;
+  private static boolean isPlaying = false;
+  private static AudioTrack mAudioTrack;
 
   private static class DirectiveName {
     public static final String StopCapture = "StopCapture";
@@ -56,9 +71,7 @@ public class ResponseParser {
     public static final String SetMute = "SetMute";
   }
 
-  public static void setContext(InputStream in) {
-    fin = in;
-  }
+
 
   public static void parseResponse(InputStream stream, String boundary)
       throws IOException, IllegalStateException {
@@ -69,8 +82,7 @@ public class ResponseParser {
       OutputStream output;
       while (nextPart) {
         String header = multipartStream.readHeaders();
-        Log.i("plasm018", "plasma018 header:" + header);
-
+        Log.i(TAG, "plasma018 header:" + header);
         if (!isJson(header)) {
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
@@ -78,7 +90,6 @@ public class ResponseParser {
           output.write(data.toByteArray());
           output.close();
           data.close();
-
         } else {
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
@@ -94,6 +105,8 @@ public class ResponseParser {
     } catch (IOException e) {
       e.printStackTrace();
     } catch (JSONException e) {
+      e.printStackTrace();
+    } catch (Exception e) {
       e.printStackTrace();
     }
   }
@@ -114,12 +127,11 @@ public class ResponseParser {
         Gson gson = new Gson();
         SpeakDirective speakerDirective =
             gson.fromJson(new JSONObject(directive).getString("directive"), SpeakDirective.class);
-        Log.i("plasm0a18", "item Namespace: " + speakerDirective.getHeader().getNamespace());
-        Log.i("plasm0a18", "item Name: " + speakerDirective.getHeader().getName());
-        Log.i("plasm0a18", "item MessageId: " + speakerDirective.getHeader().getMessageId());
-        Log.i("plasm0a18",
-            "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
-        Log.i("plasm0a18", "item url: " + speakerDirective.getPayload().getFormat());
+        Log.i(TAG, "item Namespace: " + speakerDirective.getHeader().getNamespace());
+        Log.i(TAG, "item Name: " + speakerDirective.getHeader().getName());
+        Log.i(TAG, "item MessageId: " + speakerDirective.getHeader().getMessageId());
+        Log.i(TAG, "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
+        Log.i(TAG, "item url: " + speakerDirective.getPayload().getFormat());
         break;
       case DirectiveName.ExpectSpeech:
         break;
@@ -127,31 +139,4 @@ public class ResponseParser {
         break;
     }
   }
-
-
-  private byte[] decode(byte[] content) {
-    return content;
-  }
-
-
-
-  private static void play() {
-    int i = 0;
-    byte[] s = new byte[bufferSize];
-    try {
-      DataInputStream dis = new DataInputStream(fin);
-      while ((i = dis.read(s, 0, bufferSize)) > -1) {
-        at.write(s, 0, i);
-        at.play();
-      }
-      at.stop();
-      at.release();
-      dis.close();
-      fin.close();
-    } catch (IOException e) {
-      e.printStackTrace();
-    }
-  }
-
-
 }
