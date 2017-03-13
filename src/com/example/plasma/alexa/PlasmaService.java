@@ -1,33 +1,20 @@
 package com.example.plasma.alexa;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import com.amazon.alexa.avs.http.HttpHeaders;
 
 import com.example.alexa.lib.ResponseParser;
-
-import com.example.plasma.alexa.VoiceClientActivity.RecordTask;
-
 import android.annotation.SuppressLint;
-import android.app.Activity;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioFormat;
-import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
@@ -40,13 +27,6 @@ import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.IBinder;
 import android.util.Log;
-import javazoom.jl.decoder.Bitstream;
-import javazoom.jl.decoder.BitstreamException;
-import javazoom.jl.decoder.Decoder;
-import javazoom.jl.decoder.DecoderException;
-import javazoom.jl.decoder.Header;
-import javazoom.jl.decoder.SampleBuffer;
-import android.media.MediaFormat;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.MediaType;
@@ -54,6 +34,8 @@ import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import okio.Buffer;
+import okio.BufferedSource;
 
 
 @SuppressLint("Instantiatable")
@@ -61,12 +43,10 @@ public class PlasmaService extends Service {
   private static final String TAG = "PlasmaService";
   private Context mApplicationContext;
   private MainActivity mainActivity;
-  private OkHttpClient downChannelClient;
-  public static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+  private OkHttpClient AVSClient;
+
 
   private String loginToken;
-  private String url;
-  private static int number = 0;
 
   // 錄音程式的資訊
   private static final int RECORDER_SAMPLERATE = 16000;
@@ -88,6 +68,8 @@ public class PlasmaService extends Service {
   private boolean isPlaying = false;
   private AudioTrack mAudioTrack;
   private BufferInfo info;
+  
+  
 
   private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
   private ByteArrayOutputStream dos;
@@ -148,6 +130,7 @@ public class PlasmaService extends Service {
 
 
   class RecordTask extends AsyncTask<Void, Integer, Void> {
+
     @Override
     protected Void doInBackground(Void... arg0) {
       isRecording = true;
@@ -177,14 +160,14 @@ public class PlasmaService extends Service {
         e.printStackTrace();
       }
       return null;
+
     }
 
-    // 当在上面方法中调用publishProgress时，该方法触发,该方法在UI线程中被执行
-    protected void onProgressUpdate(Integer... progress) {
-      // stateView.setText(progress[0].toString());
-    }
+    protected void onProgressUpdate(Integer... progress) {}
 
-    protected void onPostExecute(Void result) {}
+    protected void onPostExecute(Void result) {
+
+    }
 
     protected void onPreExecute() {}
 
@@ -195,136 +178,123 @@ public class PlasmaService extends Service {
     new Thread() {
       @Override
       public void run() {
-        try {
+        OkHttpClient.Builder clientBuilder =
+            new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.SECONDS).writeTimeout(0, TimeUnit.SECONDS);
 
-          OkHttpClient.Builder clientBuilder =
-              new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS);
+        AVSClient = clientBuilder.build();
+        Request downChannelRequest = new Request.Builder().get().url(HttpHeaders.DIRECT_URL)
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
 
-          downChannelClient = clientBuilder.build();
-          Request downChannelRequest = new Request.Builder().get()
-              .url("https://avs-alexa-na.amazon.com/v20160207/directives")
-              .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
-          Response downChannelResponse;
-          downChannelResponse = downChannelClient.newCall(downChannelRequest).execute();
-          Log.i(TAG, "start downChannel  code:" + downChannelResponse.code());
-          Log.i(TAG, "start downChannel headers: " + downChannelResponse.headers());
+        AVSClient.newCall(downChannelRequest).enqueue(new Callback() {
+          @Override
+          public void onResponse(Call arg0, Response arg1) throws IOException {
+            Log.i(TAG, "start downChannel  code:" + arg1.code());
+            Log.i(TAG, "start downChannel headers: " + arg1.headers());
+            Log.i(TAG, "Call " + arg0.toString());
+            if (arg1.code() == 200) {
+              MultipartBody mBody = null;
 
-          MultipartBody mBody = null;
-          Request.Builder syncRequestBuilder =
-              new Request.Builder().url("https://avs-alexa-na.amazon.com/v20160207/events")
+              mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
+                  .addFormDataPart("name", "metadata",
+                      okhttp3.RequestBody.create(MediaType.parse(HttpHeaders.MEDIATYPE_JSON),
+                          JSONTest.synchronizeStateEvent()))
+                  .build();
+
+              Request.Builder syncRequestBuilder = new Request.Builder().url(HttpHeaders.EVENT_URL)
                   .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
                   .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
                   .method("POST", mBody);
 
-          mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
-              .addFormDataPart("name", "metadata",
-                  okhttp3.RequestBody.create(MediaType.parse("application/json; charset=UTF-8"),
-                      JSONTest.synchronizeStateEvent()))
-              .build();
+              Request syncRequest = syncRequestBuilder.build();
+              Log.i(TAG, "syncRequest: " + syncRequest.toString());
+              Response syncResponse = AVSClient.newCall(syncRequest).execute();
+              Log.i(TAG, "syncResponse code:" + syncResponse.code());
+              Log.i(TAG, "syncResponse headers: " + syncResponse.headers());
+              Log.i(TAG, "syncResponse body: " + syncResponse.body().string());
+              syncResponse.close();
 
-          Request syncRequest = syncRequestBuilder.build();
-          Log.i(TAG, "syncRequest: " + syncRequest.toString());
-          Response syncResponse = downChannelClient.newCall(syncRequest).execute();
-          Log.i(TAG, "syncResponse code:" + syncResponse.code());
-          Log.i(TAG, "syncResponse headers: " + syncResponse.headers());
-          Log.i(TAG, "syncResponse body: " + syncResponse.body().string());
-          syncResponse.close();
+              BufferedSource bufferedSource = arg1.body().source();
+              Buffer buffer = new Buffer();
 
-        } catch (IOException e) {
-          e.printStackTrace();
-        }
+              while (!bufferedSource.exhausted()) {
+                Log.w(TAG, "downchannel received data!!!");
+                bufferedSource.read(buffer, 8192);
+                Log.d(TAG, "Size of data read: " + buffer.size());
+              }
+            }
+          }
+
+          @Override
+          public void onFailure(Call arg0, IOException arg1) {
+
+
+          }
+        });
+      }
+    }.start();
+
+  }
+
+
+  private void sendRequest() {
+    new Thread() {
+      @Override
+      public void run() {
+
       }
     }.start();
   }
 
 
   private void sendMessage() {
+
     new Thread() {
       @Override
       public void run() {
+        //測試寫法，希望達成錄音的執行緒結束之後再開始傳送request
         try {
-          // InputStream in = getAssets().open("weather.raw");
-          // int byteCount = in.available();
-          // byte[] buff = new byte[byteCount];
-          // in.read(buff, 0, byteCount);
-
-          OkHttpClient.Builder clientBuilder =
-              new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS);
-          downChannelClient = clientBuilder.build();
-
-          Request request = new Request.Builder().get()
-              .url("https://avs-alexa-na.amazon.com/v20160207/directives")
-              .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
-          Response response = downChannelClient.newCall(request).execute();
-          Log.i("plasma018", "plasma018 code:" + response.code());
-          Log.i("plasma018", "plasma018 headers: " + response.headers());
-
-
-          MultipartBody mBody = null;
-          Request.Builder request2 =
-              new Request.Builder().url("https://avs-alexa-na.amazon.com/v20160207/events")
-                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
-                  .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__");
-
-          mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
-              .addFormDataPart("name", "metadata",
-                  okhttp3.RequestBody.create(MediaType.parse("application/json; charset=UTF-8"),
-                      JSONTest.synchronizeStateEvent()))
-              .build();
-
-          request2.method("POST", mBody);
-          Request request3 = request2.build();
-          Log.i("plasma018", "plasma018 Request: " + request3.toString());
-          Response response2 = downChannelClient.newCall(request3).execute();
-
-          Log.i("plasma018", "plasma018 response2 code:" + response2.code());
-          Log.i("plasma018", "plasma018 response2 headers: " + response2.headers());
-          Log.i("plasma018", "plasm0a18 response2 body: " + response2.body().string());
-          response2.close();
-
-          Request.Builder request_audio =
-              new Request.Builder().url("https://avs-alexa-na.amazon.com/v20160207/events")
-                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
-                  .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__");
-          MultipartBody mBody_audio = null;
-          mBody_audio = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
-              .addFormDataPart("name", "metadata",
-                  okhttp3.RequestBody.create(MediaType.parse("application/json; charset=UTF-8"),
-                      JSONTest.recognizeEvent()))
-              .addFormDataPart("name", "audio", okhttp3.RequestBody
-                  .create(MediaType.parse("application/octet-stream"), dos.toByteArray()))
-              .build();
-
-
-          request_audio.method("POST", mBody_audio);
-          Request requestAudio = request_audio.build();
-          OkHttpClient client = new OkHttpClient();
-          client.newCall(requestAudio).enqueue(new Callback() {
-            @Override
-            public void onResponse(Call arg0, Response arg1) throws IOException {
-              Log.i("plasma018", "plasma018 responseAudio code:" + arg1.code());
-              mainActivity.setStatusGone();
-              if (arg1.code() == 200) {
-                String boundary = arg1.headers().get("content-type").split(";")[1].substring(9);
-                Log.i("plasma018", "plasma018 responseAudio boundary: " + boundary);
-                ResponseParser.parseResponse(arg1.body().byteStream(), boundary);
-                mediaPlay();
-              }
-            }
-
-            @Override
-            public void onFailure(Call arg0, IOException arg1) {
-              Log.i("plasma018", "plasma018 responseAudio onFailure: " + arg1.getMessage());
-            }
-          });
-        } catch (MalformedURLException e) {
-          Log.i("plasma018", "MalformedURLException: " + e);
-          e.printStackTrace();
-        } catch (IOException e) {
-
-          Log.i("plasma018", "IOException: " + e);
+          recorderTask.get();
+        } catch (InterruptedException | ExecutionException e) {
           e.printStackTrace();
         }
+        //測試寫法，希望達成錄音的執行緒結束之後再開始傳送request
+        MultipartBody mBody_audio = null;
+        mBody_audio = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
+            .addFormDataPart("name", "metadata",
+                okhttp3.RequestBody.create(MediaType.parse("application/json; charset=UTF-8"),
+                    JSONTest.recognizeEvent()))
+            .addFormDataPart("name", "audio", okhttp3.RequestBody
+                .create(MediaType.parse(HttpHeaders.MEDIATYPE_AUDIO), dos.toByteArray()))
+            .build();
+
+        Request.Builder request_audio = new Request.Builder().url(HttpHeaders.EVENT_URL)
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
+            .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
+            .method("POST", mBody_audio);
+
+        Request requestAudio = request_audio.build();
+
+        AVSClient.newCall(requestAudio).enqueue(new Callback() {
+          @Override
+          public void onResponse(Call arg0, Response arg1) throws IOException {
+            Log.i("plasma018", "plasma018 responseAudio code:" + arg1.code());
+            mainActivity.setStatusGone();
+            if (arg1.code() == 200) {
+              //測試寫法，要取的boundary的值，用來解開Multipart
+              String boundary =
+                  arg1.headers().get(HttpHeaders.CONTENT_TYPE).split(";")[1].substring(9);
+              Log.i("plasma018", "plasma018 responseAudio boundary: " + boundary);
+              ResponseParser.parseResponse(arg1.body().byteStream(), boundary);
+              mediaPlay();
+            }
+          }
+
+          @Override
+          public void onFailure(Call arg0, IOException arg1) {
+            Log.i("plasma018", "plasma018 responseAudio onFailure: " + arg1.getMessage());
+          }
+        });
       };
     }.start();
   }

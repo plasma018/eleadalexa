@@ -89,6 +89,7 @@ public class MainActivity extends Activity {
           case MotionEvent.ACTION_DOWN:
             Log.i(TAG, "MotionEvent.ACTION_DOWN");
             serviceStatus.setVisibility(View.VISIBLE);
+            serviceStatus.setText(R.string.listening);
             plasmaService.RecordVoice();
             break;
         }
@@ -147,7 +148,7 @@ public class MainActivity extends Activity {
       if (authorizeResult.getAccessToken() != null) {
         Intent intent = new Intent(MainActivity.this, PlasmaService.class);
         intent.putExtra("token", authorizeResult.getAccessToken());
-        intent.setAction();
+        intent.setAction(App.ServiceAction.startService);
         startService(intent);
         runOnUiThread(new Runnable() {
           @Override

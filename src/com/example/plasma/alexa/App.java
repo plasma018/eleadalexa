@@ -2,6 +2,7 @@ package com.example.plasma.alexa;
 
 import android.app.Application;
 
+
 public class App extends Application {
   private static PlasmaService plasmaService = null;
   private static MainActivity mainActivity = null;
