@@ -132,6 +132,7 @@ public class ResponseParser {
         Log.i(TAG, "item MessageId: " + speakerDirective.getHeader().getMessageId());
         Log.i(TAG, "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
         Log.i(TAG, "item url: " + speakerDirective.getPayload().getFormat());
+        Log.i(TAG, "item token: " + speakerDirective.getPayload().getToken());
         break;
       case DirectiveName.ExpectSpeech:
         break;

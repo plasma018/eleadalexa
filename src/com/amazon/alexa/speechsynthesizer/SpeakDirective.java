@@ -20,7 +20,7 @@ public class SpeakDirective implements Serializable {
     payload = new SpeakDirectivePayload();
     payload.setUrl(url);
     payload.setFormat(format);
-    payload.setFormat(format);
+    payload.setToken(token);
   }
 
   public DialogRequestIdHeader getHeader() {
