@@ -21,9 +21,11 @@ public class HttpHeaders {
   public static final String AUTHORIZATION = "Authorization";
   public static final String DIRECT_URL = "https://avs-alexa-na.amazon.com/v20160207/directives";
   public static final String EVENT_URL = "https://avs-alexa-na.amazon.com/v20160207/events";
+  public static final String PING_URL = "https://avs-alexa-na.amazon.com/ping";
   public static final String MEDIATYPE_JSON = "application/json; charset=utf-8";
   public static final String MEDIATYPE_AUDIO = "application/octet-stream";
- 
+  public static final long CONNECTION_PING_MILLISECINDS = 5 * 60 * 1000;
+
   public static class Parameters {
     public static final String BOUNDARY = "boundary";
     public static final String CHARSET = "charset";

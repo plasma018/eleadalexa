@@ -27,7 +27,7 @@ public class ExpectSpeechDirective implements Serializable {
     return header;
   }
 
-  public Payload getPayLoad() {
+  public Listen getPayLoad() {
     return payload;
   }
 }

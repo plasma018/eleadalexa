@@ -2,7 +2,6 @@ package com.example.plasma.alexa;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -10,10 +9,11 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ExecutionException;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.fileupload.MultipartStream;
@@ -21,10 +21,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import com.amazon.alexa.avs.http.HttpHeaders;
+import com.amazon.alexa.speechrecongizer.ExpectSpeechDirective;
+import com.amazon.alexa.speechrecongizer.ExpectSpeechTimedOutEvent;
 import com.amazon.alexa.speechsynthesizer.SpeakDirective;
 import com.amazon.alexa.speechsynthesizer.SpeechFinishedEvent;
 import com.amazon.alexa.speechsynthesizer.SpeechStartedEvent;
-import com.example.alexa.lib.ResponseParser;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
@@ -64,34 +65,18 @@ public class PlasmaService extends Service {
   private static final String TAG = "plasmaService";
   private Context mApplicationContext;
   private MainActivity mainActivity;
-  private OkHttpClient AVSClient;
-
-
+  private OkHttpClient AVSClient = new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS)
+      .readTimeout(0, TimeUnit.SECONDS).writeTimeout(0, TimeUnit.SECONDS).build();
+  private Request downChannelRequest;
   private String loginToken;
-
   // 錄音程式的資訊
   private static final int RECORDER_SAMPLERATE = 16000;
   private static final int RECORDER_CHANNELS = AudioFormat.CHANNEL_IN_MONO;
   private static final int RECORDER_AUDIO_ENCODING = AudioFormat.ENCODING_PCM_16BIT;
   private RecordTask recorderTask = null;
   private boolean isRecording = false;
-
   private MediaPlayer mPlayer;
-
   // 播放聲音的資訊
-  private MediaCodec codec;
-  private MediaExtractor extractor;
-  private MediaFormat format;
-  private ByteBuffer[] codecInputBuffers;
-  private ByteBuffer[] codecOutputBuffers;
-  private Boolean sawInputEOS = false;
-  private Boolean sawOutputEOS = false;
-  private boolean isPlaying = false;
-  private AudioTrack mAudioTrack;
-  private BufferInfo info;
-
-
-
   private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
   private ByteArrayOutputStream dos;
 
@@ -104,9 +89,7 @@ public class PlasmaService extends Service {
     public static final String SetMute = "SetMute";
   }
 
-
   private final int SPEAK = 1;
-
   private Handler DirectiveHandler;
   private Map<String, InputStream> AudioStream = new HashMap();
 
@@ -123,22 +106,22 @@ public class PlasmaService extends Service {
     Log.i(TAG, TAG + " onCreate");
     init();
 
-    int bufferSize = 2408;
-    InputStream fin;
-    try {
-      fin = getAssets().open("timer.raw");
-      dos = new ByteArrayOutputStream();
-      Log.i(TAG, TAG + "fin byte: " + fin.available());
-      byte[] buffer = new byte[1024];
-      int len = fin.read(buffer);
-      while (len != -1) {
-        dos.write(buffer, 0, len);
-        len = fin.read(buffer);
-        Log.i(TAG, TAG + "READ BYTE: " + len);
-      }
-    } catch (IOException e) {
-      e.printStackTrace();
-    }
+    // int bufferSize = 2408;
+    // InputStream fin;
+    // try {
+    // fin = getAssets().open("timer.raw");
+    // dos = new ByteArrayOutputStream();
+    // Log.i(TAG, TAG + "fin byte: " + fin.available());
+    // byte[] buffer = new byte[1024];
+    // int len = fin.read(buffer);
+    // while (len != -1) {
+    // dos.write(buffer, 0, len);
+    // len = fin.read(buffer);
+    // Log.i(TAG, TAG + "READ BYTE: " + len);
+    // }
+    // } catch (IOException e) {
+    // e.printStackTrace();
+    // }
   }
 
   @Override
@@ -151,6 +134,8 @@ public class PlasmaService extends Service {
         loginToken = intent.getStringExtra("token");
         Log.i(TAG, TAG + "token: " + loginToken);
         startService();
+        setPingTimer();
+        Log.i(TAG, TAG + "startService finish!!!!");
         break;
       default:
         Log.i(TAG, TAG + "onStartCommand default nothing to say");
@@ -173,25 +158,18 @@ public class PlasmaService extends Service {
     new Thread() {
       public void run() {
         Looper.prepare();
-
         DirectiveHandler = new Handler() {
           @Override
-          public void handleMessage(Message msg) {
-            switch (msg.what) {
-              case SPEAK:
-                break;
-            }
-          }
+          public void handleMessage(Message msg) {}
         };
-
         Looper.loop();
       }
     }.start();
   }
 
   public void RecordVoice() {
-    // recorderTask = new RecordTask();
-    // recorderTask.execute();
+    recorderTask = new RecordTask();
+    recorderTask.execute();
   }
 
   public void StopRecordVoice() {
@@ -249,62 +227,129 @@ public class PlasmaService extends Service {
     new Thread() {
       @Override
       public void run() {
-        OkHttpClient.Builder clientBuilder =
-            new OkHttpClient.Builder().connectTimeout(0, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.SECONDS).writeTimeout(0, TimeUnit.SECONDS);
 
-        AVSClient = clientBuilder.build();
-        Request downChannelRequest = new Request.Builder().get().url(HttpHeaders.DIRECT_URL)
+        downChannelRequest = new Request.Builder().get().url(HttpHeaders.DIRECT_URL)
             .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
 
-        AVSClient.newCall(downChannelRequest).enqueue(new Callback() {
-          @Override
-          public void onResponse(Call arg0, Response arg1) throws IOException {
-            Log.i(TAG, "start downChannel  code:" + arg1.code());
-            Log.i(TAG, "start downChannel headers: " + arg1.headers());
-            Log.i(TAG, "Call " + arg0.toString());
-            if (arg1.code() == 200) {
-              MultipartBody mBody = null;
+        try {
+          final Response response = AVSClient.newCall(downChannelRequest).execute();
 
-              mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
-                  .addFormDataPart("name", "metadata",
-                      okhttp3.RequestBody.create(MediaType.parse(HttpHeaders.MEDIATYPE_JSON),
-                          JSONTest.synchronizeStateEvent()))
-                  .build();
+          Log.i(TAG, "start downChannel  code:" + response.code());
+          Log.i(TAG, "start downChannel headers: " + response.headers());
 
-              Request.Builder syncRequestBuilder = new Request.Builder().url(HttpHeaders.EVENT_URL)
-                  .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
-                  .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
-                  .method("POST", mBody);
+          new Thread() {
+            @Override
+            public void run() {
 
-              Request syncRequest = syncRequestBuilder.build();
-              Log.i(TAG, "syncRequest: " + syncRequest.toString());
-              Response syncResponse = AVSClient.newCall(syncRequest).execute();
-              Log.i(TAG, "syncResponse code:" + syncResponse.code());
-              Log.i(TAG, "syncResponse headers: " + syncResponse.headers());
-              Log.i(TAG, "syncResponse body: " + syncResponse.body().string());
-              syncResponse.close();
-
-              BufferedSource bufferedSource = arg1.body().source();
+              BufferedSource bufferedSource = response.body().source();
               Buffer buffer = new Buffer();
 
-              while (!bufferedSource.exhausted()) {
-                Log.w(TAG, "downchannel received data!!!");
-                bufferedSource.read(buffer, 8192);
-                Log.d(TAG, "Size of data read: " + buffer.size());
+              try {
+                while (!bufferedSource.exhausted()) {
+                  Log.w(TAG, "downchannel received data!!!");
+                  bufferedSource.read(buffer, 8192);
+                  Log.d(TAG, "Size of data read: " + buffer.size());
+                }
+              } catch (IOException e) {
+                e.printStackTrace();
               }
-              Log.i(TAG, "bufferedSource.exhausted(): " + bufferedSource.exhausted());
             }
+          }.start();
+
+          if (response.code() == 200) {
+            MultipartBody mBody = null;
+
+            mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
+                .addFormDataPart("name", "metadata", okhttp3.RequestBody.create(
+                    MediaType.parse(HttpHeaders.MEDIATYPE_JSON), JSONTest.synchronizeStateEvent()))
+                .build();
+
+            Request.Builder syncRequestBuilder = new Request.Builder().url(HttpHeaders.EVENT_URL)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
+                .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
+                .method("POST", mBody);
+
+            Request syncRequest = syncRequestBuilder.build();
+            Log.i(TAG, "syncRequest: " + syncRequest.toString());
+            Response syncResponse = AVSClient.newCall(syncRequest).execute();
+            Log.i(TAG, "syncResponse code:" + syncResponse.code());
+            Log.i(TAG, "syncResponse headers: " + syncResponse.headers());
+            Log.i(TAG, "syncResponse body: " + syncResponse.body().string());
+            syncResponse.close();
+
           }
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
 
-          @Override
-          public void onFailure(Call arg0, IOException arg1) {
 
-
-          }
-        });
+        // AVSClient.newCall(downChannelRequest).enqueue(new Callback() {
+        // @Override
+        // public void onResponse(Call arg0, Response arg1) throws IOException {
+        // Log.i(TAG, "start downChannel code:" + arg1.code());
+        // Log.i(TAG, "start downChannel headers: " + arg1.headers());
+        // Log.i(TAG, "Call " + arg0.toString());
+        // if (arg1.code() == 200) {
+        // MultipartBody mBody = null;
+        //
+        // mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
+        // .addFormDataPart("name", "metadata",
+        // okhttp3.RequestBody.create(MediaType.parse(HttpHeaders.MEDIATYPE_JSON),
+        // JSONTest.synchronizeStateEvent()))
+        // .build();
+        //
+        // Request.Builder syncRequestBuilder = new Request.Builder().url(HttpHeaders.EVENT_URL)
+        // .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
+        // .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
+        // .method("POST", mBody);
+        //
+        // Request syncRequest = syncRequestBuilder.build();
+        // Log.i(TAG, "syncRequest: " + syncRequest.toString());
+        // Response syncResponse = AVSClient.newCall(syncRequest).execute();
+        // Log.i(TAG, "syncResponse code:" + syncResponse.code());
+        // Log.i(TAG, "syncResponse headers: " + syncResponse.headers());
+        // Log.i(TAG, "syncResponse body: " + syncResponse.body().string());
+        // syncResponse.close();
+        //
+        // BufferedSource bufferedSource = arg1.body().source();
+        // Buffer buffer = new Buffer();
+        //
+        // while (!bufferedSource.exhausted()) {
+        // Log.w(TAG, "downchannel received data!!!");
+        // bufferedSource.read(buffer, 8192);
+        // Log.d(TAG, "Size of data read: " + buffer.size());
+        // }
+        // Log.i(TAG, "bufferedSource.exhausted(): " + bufferedSource.exhausted());
+        // }
+        // }
+        //
+        // @Override
+        // public void onFailure(Call arg0, IOException arg1) {
+        //
+        //
+        // }
+        // });
       }
     }.start();
+  }
+
+  private void setPingTimer() {
+    Timer timer = new Timer();
+    timer.schedule(new TimerTask() {
+      @Override
+      public void run() {
+        Request pingRequest = new Request.Builder().get().url(HttpHeaders.PING_URL)
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken).build();
+        try {
+          Response pingResponse = AVSClient.newCall(pingRequest).execute();
+          Log.i(TAG, TAG + " pingResponse code: " + pingResponse.code());
+          Log.i(TAG, TAG + " pingResponse headers: " + pingResponse.headers());
+          Log.i(TAG, TAG + " pingResponse body: " + pingResponse.message());
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
+    }, 2000, HttpHeaders.CONNECTION_PING_MILLISECINDS);
   }
 
 
@@ -325,7 +370,7 @@ public class PlasmaService extends Service {
         .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
         .method("POST", mBody);
     Request EventRequest = syncRequestBuilder.build();
-    Log.i(TAG, "EventRequest: " + EventRequest.body().toString());
+    Log.i(TAG, "EventRequest: " + EventRequest.body());
 
 
     try {
@@ -393,21 +438,23 @@ public class PlasmaService extends Service {
   }
 
 
-
   public void mediaPlay() {
     mPlayer = MediaPlayer.create(this, Uri.parse("/sdcard/voice.mp3"));
     mPlayer.start();
   }
 
+  
   private void parseVoiceResponse(InputStream stream, String boundary)
       throws IOException, IllegalStateException {
     File file = new File("/sdcard/voice.mp3");
-    String directive = null;
+    LinkedList<String> requestList = new LinkedList();
+    // String directive = null;
     try {
       MultipartStream multipartStream =
           new MultipartStream(stream, boundary.getBytes(), 100000, null);
       boolean nextPart = multipartStream.skipPreamble();
       OutputStream output;
+
       while (nextPart) {
         String header = multipartStream.readHeaders();
         Log.i(TAG, "plasma018 header:" + header);
@@ -421,19 +468,16 @@ public class PlasmaService extends Service {
         } else {
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
-          directive = data.toString(Charset.defaultCharset().displayName());
+          String directive = data.toString(Charset.defaultCharset().displayName());
+          Log.i(TAG, "directive TEST: " + directive);
+          requestList.add(directive);
         }
         nextPart = multipartStream.readBoundary();
       }
-
-      getDirective(directive, null);
-    } catch (
-
-    MultipartStream.MalformedStreamException e) {
+      getDirective(requestList, null);
+    } catch (MultipartStream.MalformedStreamException e) {
       e.printStackTrace();
     } catch (IOException e) {
-      e.printStackTrace();
-    } catch (JSONException e) {
       e.printStackTrace();
     } catch (Exception e) {
       e.printStackTrace();
@@ -441,55 +485,86 @@ public class PlasmaService extends Service {
   }
 
 
-  private void getDirective(String directive, final InputStream audioInput) throws JSONException {
-    if (directive == null) {
-      Log.i(TAG, TAG + "Error !!!");
-      return;
-    }
-    String directiveName = new JSONObject(directive).getJSONObject("directive")
-        .getJSONObject("header").getString("name");
-    Gson gson = new Gson();
-    switch (directiveName) {
-      case DirectiveName.Speak:
-        final SpeakDirective speakerDirective =
-            gson.fromJson(new JSONObject(directive).getString("directive"), SpeakDirective.class);
-        Log.i(TAG, "item Namespace: " + speakerDirective.getHeader().getNamespace());
-        Log.i(TAG, "item Name: " + speakerDirective.getHeader().getName());
-        Log.i(TAG, "item MessageId: " + speakerDirective.getHeader().getMessageId());
-        Log.i(TAG, "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
-        Log.i(TAG, "item url: " + speakerDirective.getPayload().getFormat());
-        Log.i(TAG, "item token: " + speakerDirective.getPayload().getToken());
-        AudioStream.put(speakerDirective.getHeader().getDialogRequestId(), audioInput);
+  private void getDirective(List<String> requestList, final InputStream audioInput)
+      throws JSONException {
 
-        Runnable runnable = new Runnable() {
-          @Override
-          public void run() {
-            final Event event = new Event();
-            SpeechStartedEvent speechStarted = new SpeechStartedEvent();
-            speechStarted.setHeader("SpeechSynthesizer", "SpeechStarted");
-            speechStarted.setPayload(speakerDirective.getPayload().getToken());
-            event.setEvet(speechStarted);
-            sendRequest(event);
+    while (requestList.iterator().hasNext()) {
+      String directive = requestList.iterator().next();
+
+      if (directive == null) {
+        Log.i(TAG, TAG + "Error !!!");
+        return;
+      }
+
+      String directiveName = new JSONObject(directive).getJSONObject("directive")
+          .getJSONObject("header").getString("name");
+      Gson gson = new Gson();
+
+      switch (directiveName) {
+        case DirectiveName.Speak:
+          final SpeakDirective speakerDirective =
+              gson.fromJson(new JSONObject(directive).getString("directive"), SpeakDirective.class);
+          Log.i(TAG, "item Namespace: " + speakerDirective.getHeader().getNamespace());
+          Log.i(TAG, "item Name: " + speakerDirective.getHeader().getName());
+          Log.i(TAG, "item MessageId: " + speakerDirective.getHeader().getMessageId());
+          Log.i(TAG, "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
+          Log.i(TAG, "item url: " + speakerDirective.getPayload().getFormat());
+          Log.i(TAG, "item token: " + speakerDirective.getPayload().getToken());
 
 
-            mediaPlay();
-
-            SpeechFinishedEvent speechFinished = new SpeechFinishedEvent();
-            speechFinished.setHeader("SpeechSynthesizer", "SpeechFinished");
-            speechFinished.setPayload(speakerDirective.getPayload().getToken());
-            sendRequest(event);
-          }
-        };
-        
-        // DirectiveHandler.removeCallbacks(runnable, speakerDirective.getPayload().getToken());
-        DirectiveHandler.postAtTime(runnable, speakerDirective.getPayload().getToken(), 0);
+          Runnable runnable = new Runnable() {
+            @Override
+            public void run() {
+              final Event event = new Event();
+              SpeechStartedEvent speechStarted = new SpeechStartedEvent();
+              speechStarted.setHeader("SpeechSynthesizer", "SpeechStarted");
+              speechStarted.setPayload(speakerDirective.getPayload().getToken());
+              event.setEvet(speechStarted);
+              sendRequest(event);
 
 
-        break;
-      case DirectiveName.ExpectSpeech:
-        break;
-      default:
-        break;
+              mediaPlay();
+
+              SpeechFinishedEvent speechFinished = new SpeechFinishedEvent();
+              speechFinished.setHeader("SpeechSynthesizer", "SpeechFinished");
+              speechFinished.setPayload(speakerDirective.getPayload().getToken());
+              sendRequest(event);
+            }
+          };
+
+          // DirectiveHandler.removeCallbacks(runnable, speakerDirective.getPayload().getToken());
+          DirectiveHandler.postAtTime(runnable, speakerDirective.getPayload().getToken(), 0);
+
+
+          break;
+        case DirectiveName.ExpectSpeech:
+
+          final ExpectSpeechDirective expectSpeech = gson.fromJson(
+              new JSONObject(directive).getString("directive"), ExpectSpeechDirective.class);
+          Log.i(TAG, "expectSpeech Namespace: " + expectSpeech.getHeader().getNamespace());
+          Log.i(TAG, "expectSpeech Name: " + expectSpeech.getHeader().getName());
+          Log.i(TAG, "expectSpeech MessageId: " + expectSpeech.getHeader().getMessageId());
+          Log.i(TAG,
+              "expectSpeech DialogRequestId: " + expectSpeech.getHeader().getDialogRequestId());
+          Log.i(TAG, "item timeoutInMilliseconds: "
+              + expectSpeech.getPayLoad().getTimeoutIntervalInMillis());
+
+          Runnable expectSpeechR = new Runnable() {
+            @Override
+            public void run() {
+              final Event event = new Event();
+              ExpectSpeechTimedOutEvent timeOutEvent = new ExpectSpeechTimedOutEvent();
+              timeOutEvent.setHeader("SpeechRecognizer", "ExpectSpeechTimeOut");
+              sendRequest(event);
+            }
+          };
+          DirectiveHandler.postAtTime(expectSpeechR, expectSpeech.getHeader().getDialogRequestId(),
+              expectSpeech.getPayLoad().getTimeoutIntervalInMillis());
+          break;
+
+        default:
+          break;
+      }
     }
   }
 
