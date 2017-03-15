@@ -3,10 +3,11 @@ package com.amazon.alexa.speechsynthesizer;
 import java.io.Serializable;
 
 import com.amazon.alexa.message.DialogRequestIdHeader;
+import com.example.plasma.alexa.Directive;
 
 
 @SuppressWarnings("serial")
-public class SpeakDirective implements Serializable {
+public class SpeakDirective implements Serializable, Directive {
   DialogRequestIdHeader header;
   SpeakDirectivePayload payload;
 
@@ -30,4 +31,9 @@ public class SpeakDirective implements Serializable {
   public SpeakDirectivePayload getPayload() {
     return payload;
   }
+  
+  
+  
+  
+  
 }

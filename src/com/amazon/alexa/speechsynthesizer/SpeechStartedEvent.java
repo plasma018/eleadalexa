@@ -4,9 +4,10 @@ import java.io.Serializable;
 
 import com.amazon.alexa.message.MessageIdHeader;
 import com.amazon.alexa.message.Payload;
+import com.example.plasma.alexa.EventInterface;
 
 @SuppressWarnings("serial")
-public class SpeechStartedEvent implements Serializable  {
+public class SpeechStartedEvent implements Serializable, EventInterface {
   MessageIdHeader header;
   SpeechLifecyclePayload payload;
 

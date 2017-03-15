@@ -9,6 +9,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -18,9 +22,11 @@ import org.json.JSONObject;
 
 import com.amazon.alexa.avs.http.HttpHeaders;
 import com.amazon.alexa.speechsynthesizer.SpeakDirective;
+import com.amazon.alexa.speechsynthesizer.SpeechFinishedEvent;
+import com.amazon.alexa.speechsynthesizer.SpeechStartedEvent;
 import com.example.alexa.lib.ResponseParser;
-import com.example.alexa.lib.ResponseParser.DirectiveName;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
 import android.annotation.SuppressLint;
 import android.app.Service;
@@ -37,7 +43,10 @@ import android.media.MediaRecorder;
 import android.media.MediaCodec.BufferInfo;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.Message;
 import android.util.Log;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -52,7 +61,7 @@ import okio.BufferedSource;
 
 @SuppressLint("Instantiatable")
 public class PlasmaService extends Service {
-  private static final String TAG = "PlasmaService";
+  private static final String TAG = "plasmaService";
   private Context mApplicationContext;
   private MainActivity mainActivity;
   private OkHttpClient AVSClient;
@@ -96,6 +105,13 @@ public class PlasmaService extends Service {
   }
 
 
+  private final int SPEAK = 1;
+
+  private Handler DirectiveHandler;
+  private Map<String, InputStream> AudioStream = new HashMap();
+
+
+
   @Override
   public IBinder onBind(Intent intent) {
     return null;
@@ -121,7 +137,6 @@ public class PlasmaService extends Service {
         Log.i(TAG, TAG + "READ BYTE: " + len);
       }
     } catch (IOException e) {
-      // TODO Auto-generated catch block
       e.printStackTrace();
     }
   }
@@ -155,6 +170,23 @@ public class PlasmaService extends Service {
     mApplicationContext = getApplicationContext();
     mainActivity = App.getMainActivity();
     mainActivity.setService(this);
+    new Thread() {
+      public void run() {
+        Looper.prepare();
+
+        DirectiveHandler = new Handler() {
+          @Override
+          public void handleMessage(Message msg) {
+            switch (msg.what) {
+              case SPEAK:
+                break;
+            }
+          }
+        };
+
+        Looper.loop();
+      }
+    }.start();
   }
 
   public void RecordVoice() {
@@ -276,38 +308,35 @@ public class PlasmaService extends Service {
   }
 
 
-  private void sendRequest() {
-    new Thread() {
-      @Override
-      public void run() {
-        MultipartBody mBody = null;
+  private void sendRequest(Event event) {
 
-        mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
-            .addFormDataPart("name", "metadata", okhttp3.RequestBody.create(
-                MediaType.parse(HttpHeaders.MEDIATYPE_JSON), JSONTest.synchronizeStateEvent()))
-            .build();
+    GsonBuilder bulider = new GsonBuilder();
+    bulider.serializeNulls();
 
 
-        Request.Builder syncRequestBuilder = new Request.Builder().url(HttpHeaders.EVENT_URL)
-            .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
-            .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
-            .method("POST", mBody);
-        Request syncRequest = syncRequestBuilder.build();
-        Log.i(TAG, "syncRequest: " + syncRequest.toString());
+    MultipartBody mBody = null;
+    mBody = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
+        .addFormDataPart("name", "metadata", okhttp3.RequestBody
+            .create(MediaType.parse(HttpHeaders.MEDIATYPE_JSON), bulider.create().toJson(event)))
+        .build();
+
+    Request.Builder syncRequestBuilder = new Request.Builder().url(HttpHeaders.EVENT_URL)
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginToken)
+        .header(HttpHeaders.CONTENT_TYPE, "multipart/form-data; boundary=__BOUNDARY__")
+        .method("POST", mBody);
+    Request EventRequest = syncRequestBuilder.build();
+    Log.i(TAG, "EventRequest: " + EventRequest.body().toString());
 
 
-
-        try {
-          Response syncResponse = AVSClient.newCall(syncRequest).execute();
-        } catch (IOException e) {
-          // TODO Auto-generated catch block
-          e.printStackTrace();
-        }
-
-
-
-      }
-    }.start();
+    try {
+      Response EventResponse = AVSClient.newCall(EventRequest).execute();
+      Log.i(TAG, TAG + "EventResponse code:" + EventResponse.code());
+      Log.i(TAG, TAG + "EventResponse headers: " + EventResponse.headers());
+      Log.i(TAG, TAG + "EventResponse body: " + EventResponse.body().string());
+      EventResponse.close();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
   }
 
 
@@ -342,21 +371,21 @@ public class PlasmaService extends Service {
         AVSClient.newCall(requestAudio).enqueue(new Callback() {
           @Override
           public void onResponse(Call arg0, Response arg1) throws IOException {
-            Log.i("plasma018", "plasma018 responseAudio code:" + arg1.code());
+            Log.i(TAG, "plasma018 responseAudio code:" + arg1.code());
             mainActivity.setStatusGone();
             if (arg1.code() == 200) {
               // 測試寫法，要取的boundary的值，用來解開Multipart
               String boundary =
                   arg1.headers().get(HttpHeaders.CONTENT_TYPE).split(";")[1].substring(9);
-              Log.i("plasma018", "plasma018 responseAudio boundary: " + boundary);
-              ResponseParser.parseResponse(arg1.body().byteStream(), boundary);
-              mediaPlay();
+              Log.i(TAG, "plasma018 responseAudio boundary: " + boundary);
+              parseVoiceResponse(arg1.body().byteStream(), boundary);
+
             }
           }
 
           @Override
           public void onFailure(Call arg0, IOException arg1) {
-            Log.i("plasma018", "plasma018 responseAudio onFailure: " + arg1.getMessage());
+            Log.i(TAG, "plasma018 responseAudio onFailure: " + arg1.getMessage());
           }
         });
       };
@@ -370,10 +399,10 @@ public class PlasmaService extends Service {
     mPlayer.start();
   }
 
-  private void parseResponse(InputStream stream, String boundary)
+  private void parseVoiceResponse(InputStream stream, String boundary)
       throws IOException, IllegalStateException {
     File file = new File("/sdcard/voice.mp3");
-
+    String directive = null;
     try {
       MultipartStream multipartStream =
           new MultipartStream(stream, boundary.getBytes(), 100000, null);
@@ -382,7 +411,7 @@ public class PlasmaService extends Service {
       while (nextPart) {
         String header = multipartStream.readHeaders();
         Log.i(TAG, "plasma018 header:" + header);
-        if (!isJson(header)) {
+        if (!header.contains("application/json")) {
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
           output = new FileOutputStream(file);
@@ -392,11 +421,12 @@ public class PlasmaService extends Service {
         } else {
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
-          String directive = data.toString(Charset.defaultCharset().displayName());
-          getDirective(directive);
+          directive = data.toString(Charset.defaultCharset().displayName());
         }
         nextPart = multipartStream.readBoundary();
       }
+
+      getDirective(directive, null);
     } catch (
 
     MultipartStream.MalformedStreamException e) {
@@ -410,21 +440,18 @@ public class PlasmaService extends Service {
     }
   }
 
-  private boolean isJson(String headers) {
-    if (headers.contains("application/json")) {
-      return true;
-    }
-    return false;
-  }
 
-  private void getDirective(String directive) throws JSONException {
+  private void getDirective(String directive, final InputStream audioInput) throws JSONException {
+    if (directive == null) {
+      Log.i(TAG, TAG + "Error !!!");
+      return;
+    }
     String directiveName = new JSONObject(directive).getJSONObject("directive")
         .getJSONObject("header").getString("name");
-
+    Gson gson = new Gson();
     switch (directiveName) {
       case DirectiveName.Speak:
-        Gson gson = new Gson();
-        SpeakDirective speakerDirective =
+        final SpeakDirective speakerDirective =
             gson.fromJson(new JSONObject(directive).getString("directive"), SpeakDirective.class);
         Log.i(TAG, "item Namespace: " + speakerDirective.getHeader().getNamespace());
         Log.i(TAG, "item Name: " + speakerDirective.getHeader().getName());
@@ -432,6 +459,32 @@ public class PlasmaService extends Service {
         Log.i(TAG, "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
         Log.i(TAG, "item url: " + speakerDirective.getPayload().getFormat());
         Log.i(TAG, "item token: " + speakerDirective.getPayload().getToken());
+        AudioStream.put(speakerDirective.getHeader().getDialogRequestId(), audioInput);
+
+        Runnable runnable = new Runnable() {
+          @Override
+          public void run() {
+            final Event event = new Event();
+            SpeechStartedEvent speechStarted = new SpeechStartedEvent();
+            speechStarted.setHeader("SpeechSynthesizer", "SpeechStarted");
+            speechStarted.setPayload(speakerDirective.getPayload().getToken());
+            event.setEvet(speechStarted);
+            sendRequest(event);
+
+
+            mediaPlay();
+
+            SpeechFinishedEvent speechFinished = new SpeechFinishedEvent();
+            speechFinished.setHeader("SpeechSynthesizer", "SpeechFinished");
+            speechFinished.setPayload(speakerDirective.getPayload().getToken());
+            sendRequest(event);
+          }
+        };
+        
+        // DirectiveHandler.removeCallbacks(runnable, speakerDirective.getPayload().getToken());
+        DirectiveHandler.postAtTime(runnable, speakerDirective.getPayload().getToken(), 0);
+
+
         break;
       case DirectiveName.ExpectSpeech:
         break;
