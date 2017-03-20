@@ -1,25 +1,41 @@
 package com.example.plasma.alexa;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.fileupload.MultipartStream;
+import org.apache.commons.io.IOUtils;
+import org.apache.http.HttpClientConnection;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import com.amazon.alexa.audioplayer.PlayDirective;
+import com.amazon.alexa.audioplayer.PlayPayload;
+import com.amazon.alexa.audioplayer.PlaybackStartedEvent;
+import com.amazon.alexa.audioplayer.PlaybackStoppedEvent;
 import com.amazon.alexa.avs.http.HttpHeaders;
 import com.amazon.alexa.speechrecongizer.ExpectSpeechDirective;
 import com.amazon.alexa.speechrecongizer.ExpectSpeechTimedOutEvent;
@@ -34,6 +50,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
@@ -44,6 +61,7 @@ import android.media.MediaRecorder;
 import android.media.MediaCodec.BufferInfo;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -75,9 +93,9 @@ public class PlasmaService extends Service {
   private static final int RECORDER_AUDIO_ENCODING = AudioFormat.ENCODING_PCM_16BIT;
   private RecordTask recorderTask = null;
   private boolean isRecording = false;
-  private MediaPlayer mPlayer;
+  private MediaPlayer mPlayer = new MediaPlayer();
   // 播放聲音的資訊
-  private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
+  // private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
   private ByteArrayOutputStream dos;
 
   private static class DirectiveName {
@@ -87,12 +105,17 @@ public class PlasmaService extends Service {
     public static final String SetVolume = "SetVolume";
     public static final String AdjustVolume = "AdjustVolume";
     public static final String SetMute = "SetMute";
+    public static final String AudioPlay = "Play";
   }
 
   private final int SPEAK = 1;
   private Handler DirectiveHandler;
-  private Map<String, InputStream> AudioStream = new HashMap();
+  private Handler audioPlayerHandler;
 
+  private LinkedList<PlayDirective> streamList = new LinkedList();
+
+  private Map<String, byte[]> AudioStream = new HashMap();
+  private Map<String, String> AudioStreamTest = new HashMap();
 
 
   @Override
@@ -106,22 +129,22 @@ public class PlasmaService extends Service {
     Log.i(TAG, TAG + " onCreate");
     init();
 
-    // int bufferSize = 2408;
-    // InputStream fin;
-    // try {
-    // fin = getAssets().open("timer.raw");
-    // dos = new ByteArrayOutputStream();
-    // Log.i(TAG, TAG + "fin byte: " + fin.available());
-    // byte[] buffer = new byte[1024];
-    // int len = fin.read(buffer);
-    // while (len != -1) {
-    // dos.write(buffer, 0, len);
-    // len = fin.read(buffer);
-    // Log.i(TAG, TAG + "READ BYTE: " + len);
-    // }
-    // } catch (IOException e) {
-    // e.printStackTrace();
-    // }
+    int bufferSize = 2408;
+    InputStream fin;
+    try {
+      fin = getAssets().open("news.raw");
+      dos = new ByteArrayOutputStream();
+      Log.i(TAG, TAG + "fin byte: " + fin.available());
+      byte[] buffer = new byte[1024];
+      int len = fin.read(buffer);
+      while (len != -1) {
+        dos.write(buffer, 0, len);
+        len = fin.read(buffer);
+        Log.i(TAG, TAG + "READ BYTE: " + len);
+      }
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
   }
 
   @Override
@@ -162,14 +185,33 @@ public class PlasmaService extends Service {
           @Override
           public void handleMessage(Message msg) {}
         };
+
+        audioPlayerHandler = new Handler() {
+          @Override
+          public void handleMessage(Message msg) {
+            switch (msg.what) {
+              case 1:
+                PlayDirective playDirectvie = streamList.getFirst();
+
+
+
+                break;
+
+              default:
+                break;
+            }
+          }
+        };
+
+
         Looper.loop();
       }
     }.start();
   }
 
   public void RecordVoice() {
-    recorderTask = new RecordTask();
-    recorderTask.execute();
+    // recorderTask = new RecordTask();
+    // recorderTask.execute();
   }
 
   public void StopRecordVoice() {
@@ -422,9 +464,10 @@ public class PlasmaService extends Service {
               // 測試寫法，要取的boundary的值，用來解開Multipart
               String boundary =
                   arg1.headers().get(HttpHeaders.CONTENT_TYPE).split(";")[1].substring(9);
-              Log.i(TAG, "plasma018 responseAudio boundary: " + boundary);
+              // Log.i(TAG, "plasma018 responseAudio boundary: " + boundary);
               parseVoiceResponse(arg1.body().byteStream(), boundary);
-
+            } else {
+              mediaPlay("file:///android_asset/error.mp3");
             }
           }
 
@@ -438,42 +481,56 @@ public class PlasmaService extends Service {
   }
 
 
-  public void mediaPlay() {
-    mPlayer = MediaPlayer.create(this, Uri.parse("/sdcard/voice.mp3"));
-    mPlayer.start();
+  public void mediaPlay(String filePath) {
+    // mPlayer = MediaPlayer.create(this, Uri.parse(
+    // "http://opml.radiotime.com/Tune.ashx?id=t112373185&sid=p60295&formats=aac,mp3&partnerId=4JqugguZ&serial=AGFF6NZQ27W7Y7FLIF4OGU36VQNQ"));
+    try {
+      mPlayer.reset();
+      mPlayer.setDataSource(filePath);
+      mPlayer.prepare();
+      mPlayer.start();
+    } catch (IllegalArgumentException | SecurityException | IllegalStateException | IOException e) {
+      e.printStackTrace();
+    }
+
   }
 
-  
+
   private void parseVoiceResponse(InputStream stream, String boundary)
       throws IOException, IllegalStateException {
-    File file = new File("/sdcard/voice.mp3");
+    File file;
     LinkedList<String> requestList = new LinkedList();
-    // String directive = null;
     try {
       MultipartStream multipartStream =
           new MultipartStream(stream, boundary.getBytes(), 100000, null);
-      boolean nextPart = multipartStream.skipPreamble();
-      OutputStream output;
-
+      boolean nextPart = multipartStream.skipPreamble();;
+      int i = 0;
       while (nextPart) {
         String header = multipartStream.readHeaders();
-        Log.i(TAG, "plasma018 header:" + header);
+        Log.i(TAG, "MultipartStream header:" + header);
         if (!header.contains("application/json")) {
+          i++;
+          String cid = header.split("<")[1].split(">")[0];
+          String filePath = "/sdcard/" + i + ".mp3";
+          Log.i(TAG, "audio cid = " + cid);
+          file = new File(filePath);
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
-          output = new FileOutputStream(file);
-          output.write(data.toByteArray());
-          output.close();
+          FileOutputStream fout = new FileOutputStream(file);
+          fout.write(data.toByteArray());
+          fout.close();
           data.close();
+          AudioStreamTest.put(cid, filePath);
         } else {
           ByteArrayOutputStream data = new ByteArrayOutputStream();
           multipartStream.readBodyData(data);
           String directive = data.toString(Charset.defaultCharset().displayName());
-          Log.i(TAG, "directive TEST: " + directive);
+          Log.i(TAG, "directive Json: " + directive);
           requestList.add(directive);
         }
         nextPart = multipartStream.readBoundary();
       }
+
       getDirective(requestList, null);
     } catch (MultipartStream.MalformedStreamException e) {
       e.printStackTrace();
@@ -484,12 +541,13 @@ public class PlasmaService extends Service {
     }
   }
 
-
   private void getDirective(List<String> requestList, final InputStream audioInput)
       throws JSONException {
 
-    while (requestList.iterator().hasNext()) {
-      String directive = requestList.iterator().next();
+    Iterator<String> iterator = requestList.iterator();
+    while (iterator.hasNext()) {
+      String directive = iterator.next();
+      Log.i(TAG, TAG + " SIZE: " + requestList.size());
 
       if (directive == null) {
         Log.i(TAG, TAG + "Error !!!");
@@ -500,7 +558,10 @@ public class PlasmaService extends Service {
           .getJSONObject("header").getString("name");
       Gson gson = new Gson();
 
+
+
       switch (directiveName) {
+
         case DirectiveName.Speak:
           final SpeakDirective speakerDirective =
               gson.fromJson(new JSONObject(directive).getString("directive"), SpeakDirective.class);
@@ -508,9 +569,9 @@ public class PlasmaService extends Service {
           Log.i(TAG, "item Name: " + speakerDirective.getHeader().getName());
           Log.i(TAG, "item MessageId: " + speakerDirective.getHeader().getMessageId());
           Log.i(TAG, "item DialogRequestId: " + speakerDirective.getHeader().getDialogRequestId());
-          Log.i(TAG, "item url: " + speakerDirective.getPayload().getFormat());
+          Log.i(TAG, "item url: " + speakerDirective.getPayload().getUrl());
           Log.i(TAG, "item token: " + speakerDirective.getPayload().getToken());
-
+          Log.i(TAG, "item Format: " + speakerDirective.getPayload().getFormat());
 
           Runnable runnable = new Runnable() {
             @Override
@@ -522,8 +583,10 @@ public class PlasmaService extends Service {
               event.setEvet(speechStarted);
               sendRequest(event);
 
+              String cid = speakerDirective.getPayload().getUrl().split("cid:")[1];
+              Log.i(TAG, TAG + " speakerDirective CID: " + cid);
 
-              mediaPlay();
+              mediaPlay(AudioStreamTest.get(cid));
 
               SpeechFinishedEvent speechFinished = new SpeechFinishedEvent();
               speechFinished.setHeader("SpeechSynthesizer", "SpeechFinished");
@@ -534,9 +597,8 @@ public class PlasmaService extends Service {
 
           // DirectiveHandler.removeCallbacks(runnable, speakerDirective.getPayload().getToken());
           DirectiveHandler.postAtTime(runnable, speakerDirective.getPayload().getToken(), 0);
-
-
           break;
+
         case DirectiveName.ExpectSpeech:
 
           final ExpectSpeechDirective expectSpeech = gson.fromJson(
@@ -555,6 +617,7 @@ public class PlasmaService extends Service {
               final Event event = new Event();
               ExpectSpeechTimedOutEvent timeOutEvent = new ExpectSpeechTimedOutEvent();
               timeOutEvent.setHeader("SpeechRecognizer", "ExpectSpeechTimeOut");
+              event.setEvet(timeOutEvent);
               sendRequest(event);
             }
           };
@@ -562,11 +625,121 @@ public class PlasmaService extends Service {
               expectSpeech.getPayLoad().getTimeoutIntervalInMillis());
           break;
 
+        case DirectiveName.AudioPlay:
+
+          final PlayDirective playDirective =
+              gson.fromJson(new JSONObject(directive).getString("directive"), PlayDirective.class);
+
+          // Log.i(TAG, "playDirective Namespace: " + playDirective.getHeader().getNamespace());
+          Log.i(TAG, "playDirective Name: " + playDirective.getHeader().getName());
+          // Log.i(TAG, "playDirective MessageId: " + playDirective.getHeader().getMessageId());
+          // Log.i(TAG,
+          // "playDirective DialogRequestId: " + playDirective.getHeader().getDialogRequestId());
+          Log.i(TAG,
+              "playDirective PlayBehavior: " + playDirective.getPlayPayload().getPlayBehavior());
+          String token = playDirective.getPlayPayload().getAudioItem().getStream().getToken();
+          String url = playDirective.getPlayPayload().getAudioItem().getStream().getUrl();
+          String expiryTime =
+              playDirective.getPlayPayload().getAudioItem().getStream().getExpiryTime();
+
+          switch (playDirective.getPlayPayload().getPlayBehavior()) {
+            case PlayPayload.PlayBehavior.REPLACE_ALL:
+              if (mPlayer != null && mPlayer.isPlaying()) {
+                mPlayer.stop();
+              }
+              streamList.clear();
+              final Event event = new Event();
+              final PlaybackStoppedEvent playbackStopped = new PlaybackStoppedEvent();
+              playbackStopped.setHeader("AudioPlayer", "PlaybackStopped");
+              playbackStopped.setPayload(token, 0L);
+              event.setEvet(playbackStopped);
+              sendRequest(event);
+              if (url.contains("cid:")) {
+                String cid = url.split("cid:")[1];
+                mediaPlay(AudioStreamTest.get(cid));
+              } else {
+                mediaPlay(url);
+              }
+              break;
+
+            case PlayPayload.PlayBehavior.ENQUEUE:
+              streamList.add(playDirective);
+              if (url.contains("cid:")) {
+                String cid = url.split("cid:")[1];
+                mediaPlay(AudioStreamTest.get(cid));
+              } else {
+                URL audioUrl;
+                InputStream in = null;
+                FileOutputStream fout = null;
+                try {
+                  audioUrl = new URL(url);
+                  HttpURLConnection urlConnection = (HttpURLConnection) audioUrl.openConnection();
+                  in = new BufferedInputStream(urlConnection.getInputStream());
+                  String filePath = "/sdcard/audio.mp3";
+                  fout = new FileOutputStream(filePath);
+                  IOUtils.copy(in, fout);
+                  mediaPlay(filePath);
+
+                } catch (MalformedURLException e) {
+                  e.printStackTrace();
+                } catch (IOException e) {
+                  e.printStackTrace();
+                } finally {
+                  try {
+                    if (in != null && fout != null) {
+                      in.close();
+                      fout.close();
+                    }
+                  } catch (IOException e) {
+                    e.printStackTrace();
+                  }
+                }
+              }
+              break;
+            case PlayPayload.PlayBehavior.REPLACE_ENQUEUED:
+
+              break;
+            default:
+              break;
+          }
+          break;
         default:
           break;
       }
     }
   }
 
+
+  public void playWav() {
+    int minBufferSize = AudioTrack.getMinBufferSize(8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
+        AudioFormat.ENCODING_PCM_16BIT);
+    int bufferSize = 512;
+    AudioTrack at =
+        new AudioTrack(AudioManager.STREAM_MUSIC, 8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
+            AudioFormat.ENCODING_PCM_16BIT, minBufferSize, AudioTrack.MODE_STREAM);
+    String filepath = Environment.getExternalStorageDirectory().getAbsolutePath();
+
+    int i = 0;
+    byte[] s = new byte[bufferSize];
+    try {
+      FileInputStream fin = new FileInputStream(filepath + "/REFERENCE.wav");
+      DataInputStream dis = new DataInputStream(fin);
+
+      at.play();
+      while ((i = dis.read(s, 0, bufferSize)) > -1) {
+        at.write(s, 0, i);
+
+      }
+      at.stop();
+      at.release();
+      dis.close();
+      fin.close();
+
+    } catch (FileNotFoundException e) {
+      e.printStackTrace();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
 
 }

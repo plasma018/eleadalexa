@@ -1,4 +1,4 @@
-package com.amazon.alexa.System;
+package com.amazon.alexa.system;
 
 import com.amazon.alexa.message.Header;
 import com.amazon.alexa.message.MessageIdHeader;

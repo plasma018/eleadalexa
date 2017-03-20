@@ -10,19 +10,25 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or implied. See the License for the 
  * specific language governing permissions and limitations under the License.
  */
-package com.amazon.alexa.System;
+package com.amazon.alexa.audioplayer;
 
-import com.amazon.alexa.message.Payload;
+public final class AudioItem {
+    private String audioItemId;
+    private Stream stream;
 
-public class UserInactivityReportPayload extends Payload {
-
-    private long inactiveTimeInSeconds;
-
-    public UserInactivityReportPayload(long inactiveTimeInSeconds) {
-        this.inactiveTimeInSeconds = inactiveTimeInSeconds;
+    public String getAudioItemId() {
+        return audioItemId;
     }
 
-    public long getInactiveTimeInSeconds() {
-        return inactiveTimeInSeconds;
+    public Stream getStream() {
+        return stream;
+    }
+
+    public void setAudioItemId(String audioItemId) {
+        this.audioItemId = audioItemId;
+    }
+
+    public void setStream(Stream stream) {
+        this.stream = stream;
     }
 }

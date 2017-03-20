@@ -3,8 +3,6 @@ package com.example.plasma.alexa;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.amazon.alexa.System.ExceptionEncounteredEvent;
-import com.amazon.alexa.System.SynchronizeStateEvent;
 import com.amazon.alexa.alerts.Alert;
 import com.amazon.alexa.avs.exception.DirectiveHandlingException.ExceptionType;
 import com.amazon.alexa.message.context.AlertsState;
@@ -32,6 +30,8 @@ import com.amazon.alexa.speechrecongizer.StopCaptureDirective;
 import com.amazon.alexa.speechsynthesizer.SpeakDirective;
 import com.amazon.alexa.speechsynthesizer.SpeechFinishedEvent;
 import com.amazon.alexa.speechsynthesizer.SpeechStartedEvent;
+import com.amazon.alexa.system.ExceptionEncounteredEvent;
+import com.amazon.alexa.system.SynchronizeStateEvent;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 

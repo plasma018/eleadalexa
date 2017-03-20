@@ -1,26 +1,37 @@
-package com.amazon.alexa.System;
+package com.amazon.alexa.system;
 
 import java.io.Serializable;
 import java.util.List;
 
 import com.amazon.alexa.avs.exception.DirectiveHandlingException.ExceptionType;
 import com.amazon.alexa.message.MessageIdHeader;
+import com.amazon.alexa.message.Payload;
 import com.amazon.alexa.message.context.Context;
+import com.amazon.alexa.system.ExceptionEncounteredEvent.Event;
 
 @SuppressWarnings("serial")
-public class ExceptionEncounteredEvent implements Serializable {
-  private Event event;
+public class SynchronizeStateEvent implements Serializable {
   private List<Context> context;
+  private Event event;
+
+  // private MessageIdHeader header;
+  // private Payload payload = new Payload();
+
+  public SynchronizeStateEvent() {}
+
+  // public void setHeader(String namespace, String name) {
+  // header = new MessageIdHeader(namespace, name);
+  // }
+
+  // public void setPayload() {};
 
   public void setContext(List<Context> context) {
     this.context = context;
   }
 
-  public void setEvent(String namespace, String name, String unparsedDirective, ExceptionType type,
-      String message) {
+  public void setEvent(String namespace, String name) {
     this.event = new Event();
     event.setHeader(namespace, name);
-    event.setPayload(unparsedDirective, type, message);
   }
 
   public Event getEvent() {
@@ -31,24 +42,33 @@ public class ExceptionEncounteredEvent implements Serializable {
     return context;
   }
 
+  // public MessageIdHeader getHeader() {
+  // return header;
+  // }
+  //
+  // public Payload getPayLoad() {
+  // return payload;
+  // }
+
   public class Event {
     private MessageIdHeader header;
-    private ExceptionEncounteredPayload payload;
+    private Payload payload = new Payload();
 
     public void setHeader(String namespace, String name) {
       header = new MessageIdHeader(namespace, name);
     }
 
-    public void setPayload(String unparsedDirective, ExceptionType type, String message) {
-      payload = new ExceptionEncounteredPayload(unparsedDirective, type, message);
-    }
+    public void setPayload() {};
 
     public MessageIdHeader getHeader() {
       return header;
     }
 
-    public ExceptionEncounteredPayload getPayLoad() {
+    public Payload getPayLoad() {
       return payload;
     }
   }
+
+
+
 }

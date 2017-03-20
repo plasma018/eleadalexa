@@ -6,6 +6,7 @@ import android.app.Application;
 public class App extends Application {
   private static PlasmaService plasmaService = null;
   private static MainActivity mainActivity = null;
+  
 
   public class ServiceAction {
     public static final String startService = "SERVICE.START";

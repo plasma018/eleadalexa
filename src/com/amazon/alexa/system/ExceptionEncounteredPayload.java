@@ -10,7 +10,7 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or implied. See the License for the 
  * specific language governing permissions and limitations under the License.
  */
-package com.amazon.alexa.System;
+package com.amazon.alexa.system;
 
 import com.amazon.alexa.avs.exception.DirectiveHandlingException.ExceptionType;
 import com.amazon.alexa.message.Payload;

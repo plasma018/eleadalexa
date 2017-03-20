@@ -1,34 +1,33 @@
-package com.amazon.alexa.System;
+package com.amazon.alexa.system;
 
 import java.io.Serializable;
 
 import com.amazon.alexa.message.Header;
 import com.amazon.alexa.message.MessageIdHeader;
+import com.amazon.alexa.message.Payload;
+import com.amazon.alexa.message.context.PlaybackStatePayload;
 
 
 @SuppressWarnings("serial")
-public class SetEndpointDirective implements Serializable {
-  SetEndpointPayload payload;
+public class ResetUserInactivityDirective implements Serializable {
+  Payload payload = new Payload();
   MessageIdHeader header;
 
-  public SetEndpointDirective() {}
+  public ResetUserInactivityDirective() {}
 
   public void setHeader(String namespace, String name) {
     header = new MessageIdHeader(namespace, name);
   }
-
-  public void setPayload(String endpoint) {
-    payload = new SetEndpointPayload();
-    payload.setEndpoint(endpoint);
-  }
-
+  public void setPayload(){}
+  
   public Header getHeader() {
     return header;
   }
 
-  public SetEndpointPayload getPayLoad() {
+  public Payload getPayLoad() {
     return payload;
   }
+
 
 
 }
