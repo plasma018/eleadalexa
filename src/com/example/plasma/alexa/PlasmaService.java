@@ -1,6 +1,7 @@
 package com.example.plasma.alexa;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.File;
@@ -9,6 +10,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
@@ -21,14 +23,17 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.fileupload.MultipartStream;
 import org.apache.commons.io.IOUtils;
-import org.apache.http.HttpClientConnection;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -57,6 +62,7 @@ import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaPlayer;
+import android.media.MediaPlayer.OnCompletionListener;
 import android.media.MediaRecorder;
 import android.media.MediaCodec.BufferInfo;
 import android.net.Uri;
@@ -93,7 +99,12 @@ public class PlasmaService extends Service {
   private static final int RECORDER_AUDIO_ENCODING = AudioFormat.ENCODING_PCM_16BIT;
   private RecordTask recorderTask = null;
   private boolean isRecording = false;
-  private MediaPlayer mPlayer = new MediaPlayer();
+  //
+  private byte[] mediaLock = new byte[0];
+  private byte[] contentLock = new byte[0];
+  private MediaPlayer mDialogPlayer = new MediaPlayer();
+  private MediaPlayer mContentPlayer = new MediaPlayer();
+
   // 播放聲音的資訊
   // private File audioFile = new File("/sdcard/voice16K16bitmono.raw");
   private ByteArrayOutputStream dos;
@@ -112,10 +123,11 @@ public class PlasmaService extends Service {
   private Handler DirectiveHandler;
   private Handler audioPlayerHandler;
 
-  private LinkedList<PlayDirective> streamList = new LinkedList();
+  private LinkedBlockingQueue<PlayDirective> streamList = new LinkedBlockingQueue();
 
   private Map<String, byte[]> AudioStream = new HashMap();
   private Map<String, String> AudioStreamTest = new HashMap();
+
 
 
   @Override
@@ -132,10 +144,10 @@ public class PlasmaService extends Service {
     int bufferSize = 2408;
     InputStream fin;
     try {
-      fin = getAssets().open("news.raw");
+      fin = getAssets().open("icrt.raw");
       dos = new ByteArrayOutputStream();
       Log.i(TAG, TAG + "fin byte: " + fin.available());
-      byte[] buffer = new byte[1024];
+      byte[] buffer = new byte[bufferSize];
       int len = fin.read(buffer);
       while (len != -1) {
         dos.write(buffer, 0, len);
@@ -171,13 +183,97 @@ public class PlasmaService extends Service {
   public void onDestroy() {
     super.onDestroy();
     Log.i(TAG, TAG + " onDestroy");
-    mPlayer.stop();
+    mDialogPlayer.stop();
   }
 
   private void init() {
     mApplicationContext = getApplicationContext();
     mainActivity = App.getMainActivity();
     mainActivity.setService(this);
+
+    mDialogPlayer.setOnCompletionListener(new OnCompletionListener() {
+
+      @Override
+      public void onCompletion(MediaPlayer mp) {
+        synchronized (mediaLock) {
+          mediaLock.notify();
+        }
+      }
+    });
+
+    mContentPlayer.setOnCompletionListener(new OnCompletionListener() {
+      @Override
+      public void onCompletion(MediaPlayer mp) {
+        synchronized (contentLock) {
+          contentLock.notify();
+        }
+      }
+
+
+
+    });
+
+    new Thread() {
+      public void run() {
+        while (true) {
+          try {
+
+            PlayDirective audioItem = (PlayDirective) streamList.take();
+
+            final String token = audioItem.getPlayPayload().getAudioItem().getStream().getToken();
+            final String url = audioItem.getPlayPayload().getAudioItem().getStream().getUrl();
+            final String expiryTime =
+                audioItem.getPlayPayload().getAudioItem().getStream().getExpiryTime();
+            final String playBehavior = audioItem.getPlayPayload().getPlayBehavior();
+            Log.i(TAG, TAG + "audioItem url: " + url);
+            switch (playBehavior) {
+              case PlayPayload.PlayBehavior.REPLACE_ALL:
+
+
+                break;
+              case PlayPayload.PlayBehavior.ENQUEUE:
+
+                if (url.contains("cid:")) {
+
+                  String cid = url.split("cid:")[1];
+                  contentPlay(AudioStreamTest.get(cid));
+                  AudioStreamTest.remove(cid);
+
+                } else {
+
+                  try (BufferedReader br = new BufferedReader(
+                      new InputStreamReader((new URL(url).openConnection().getInputStream())))) {
+                    Log.i(TAG, TAG + "audioItem url: " + url);
+                    StringBuilder sb = new StringBuilder();
+                    String output;
+                    while ((output = br.readLine()) != null) {
+                      sb.append(output);
+                    }
+
+                    Log.i(TAG, TAG + " ENQUEUE URL: " + sb.toString());
+                    contentPlay(sb.toString());
+
+                  } catch (MalformedURLException e) {
+                    e.printStackTrace();
+                  } catch (IOException e) {
+                    e.printStackTrace();
+                  }
+                }
+                break;
+
+              case PlayPayload.PlayBehavior.REPLACE_ENQUEUED:
+
+
+                break;
+            }
+          } catch (InterruptedException e) {
+            e.printStackTrace();
+          }
+        }
+      }
+    }.start();
+
+
     new Thread() {
       public void run() {
         Looper.prepare();
@@ -191,9 +287,6 @@ public class PlasmaService extends Service {
           public void handleMessage(Message msg) {
             switch (msg.what) {
               case 1:
-                PlayDirective playDirectvie = streamList.getFirst();
-
-
 
                 break;
 
@@ -202,16 +295,20 @@ public class PlasmaService extends Service {
             }
           }
         };
-
-
         Looper.loop();
       }
     }.start();
   }
 
   public void RecordVoice() {
-    // recorderTask = new RecordTask();
-    // recorderTask.execute();
+    if (mDialogPlayer != null && mDialogPlayer.isPlaying()) {
+      mDialogPlayer.stop();
+    }
+    if (mContentPlayer != null && mContentPlayer.isPlaying()) {
+      mContentPlayer.stop();
+    }
+    recorderTask = new RecordTask();
+    recorderTask.execute();
   }
 
   public void StopRecordVoice() {
@@ -433,11 +530,11 @@ public class PlasmaService extends Service {
       @Override
       public void run() {
         // 測試寫法，希望達成錄音的執行緒結束之後再開始傳送request
-        // try {
-        // recorderTask.get();
-        // } catch (InterruptedException | ExecutionException e) {
-        // e.printStackTrace();
-        // }
+        try {
+          recorderTask.get();
+        } catch (InterruptedException | ExecutionException e) {
+          e.printStackTrace();
+        }
         // 測試寫法，希望達成錄音的執行緒結束之後再開始傳送request
         MultipartBody mBody_audio = null;
         mBody_audio = new MultipartBody.Builder("__BOUNDARY__").setType(MultipartBody.FORM)
@@ -479,22 +576,6 @@ public class PlasmaService extends Service {
       };
     }.start();
   }
-
-
-  public void mediaPlay(String filePath) {
-    // mPlayer = MediaPlayer.create(this, Uri.parse(
-    // "http://opml.radiotime.com/Tune.ashx?id=t112373185&sid=p60295&formats=aac,mp3&partnerId=4JqugguZ&serial=AGFF6NZQ27W7Y7FLIF4OGU36VQNQ"));
-    try {
-      mPlayer.reset();
-      mPlayer.setDataSource(filePath);
-      mPlayer.prepare();
-      mPlayer.start();
-    } catch (IllegalArgumentException | SecurityException | IllegalStateException | IOException e) {
-      e.printStackTrace();
-    }
-
-  }
-
 
   private void parseVoiceResponse(InputStream stream, String boundary)
       throws IOException, IllegalStateException {
@@ -563,6 +644,7 @@ public class PlasmaService extends Service {
       switch (directiveName) {
 
         case DirectiveName.Speak:
+
           final SpeakDirective speakerDirective =
               gson.fromJson(new JSONObject(directive).getString("directive"), SpeakDirective.class);
           Log.i(TAG, "item Namespace: " + speakerDirective.getHeader().getNamespace());
@@ -630,71 +712,106 @@ public class PlasmaService extends Service {
           final PlayDirective playDirective =
               gson.fromJson(new JSONObject(directive).getString("directive"), PlayDirective.class);
 
-          // Log.i(TAG, "playDirective Namespace: " + playDirective.getHeader().getNamespace());
-          Log.i(TAG, "playDirective Name: " + playDirective.getHeader().getName());
-          // Log.i(TAG, "playDirective MessageId: " + playDirective.getHeader().getMessageId());
-          // Log.i(TAG,
-          // "playDirective DialogRequestId: " + playDirective.getHeader().getDialogRequestId());
-          Log.i(TAG,
-              "playDirective PlayBehavior: " + playDirective.getPlayPayload().getPlayBehavior());
-          String token = playDirective.getPlayPayload().getAudioItem().getStream().getToken();
-          String url = playDirective.getPlayPayload().getAudioItem().getStream().getUrl();
-          String expiryTime =
+          final String token = playDirective.getPlayPayload().getAudioItem().getStream().getToken();
+          final String url = playDirective.getPlayPayload().getAudioItem().getStream().getUrl();
+          final String expiryTime =
               playDirective.getPlayPayload().getAudioItem().getStream().getExpiryTime();
+          final String playBehavior = playDirective.getPlayPayload().getPlayBehavior();
 
-          switch (playDirective.getPlayPayload().getPlayBehavior()) {
+          Log.i(TAG, "playDirective Name: " + playDirective.getHeader().getName());
+          Log.i(TAG, "playDirective PlayBehavior: " + playBehavior);
+
+
+          switch (playBehavior) {
+
             case PlayPayload.PlayBehavior.REPLACE_ALL:
-              if (mPlayer != null && mPlayer.isPlaying()) {
-                mPlayer.stop();
-              }
-              streamList.clear();
-              final Event event = new Event();
-              final PlaybackStoppedEvent playbackStopped = new PlaybackStoppedEvent();
-              playbackStopped.setHeader("AudioPlayer", "PlaybackStopped");
-              playbackStopped.setPayload(token, 0L);
-              event.setEvet(playbackStopped);
-              sendRequest(event);
-              if (url.contains("cid:")) {
-                String cid = url.split("cid:")[1];
-                mediaPlay(AudioStreamTest.get(cid));
-              } else {
-                mediaPlay(url);
-              }
+
+              Runnable REPLACE_ALL = new Runnable() {
+                @Override
+                public void run() {
+                  // 停止目前正在播放的音樂，新聞，廣播串流
+                  if (mContentPlayer != null && mContentPlayer.isPlaying()) {
+                    mContentPlayer.stop();
+                  }
+
+                  streamList.clear();// 清除等待中的串流
+
+                  final Event event = new Event();
+                  final PlaybackStoppedEvent playbackStopped = new PlaybackStoppedEvent();
+                  playbackStopped.setHeader("AudioPlayer", "PlaybackStopped");
+                  playbackStopped.setPayload(token, 0L);
+                  event.setEvet(playbackStopped);
+                  sendRequest(event);
+                  
+
+                  if (url.contains("cid:")) {
+
+                    while (mDialogPlayer != null && mDialogPlayer.isPlaying()) {
+                      synchronized (mediaLock) {
+                        try {
+                          mediaLock.wait();
+                        } catch (InterruptedException e) {
+                          e.printStackTrace();
+                        }
+                      }
+                    }
+
+                    String cid = url.split("cid:")[1];
+                    contentPlay(AudioStreamTest.get(cid));
+
+                  } else {
+
+                    while (mDialogPlayer != null && mDialogPlayer.isPlaying()) {
+                      synchronized (mediaLock) {
+                        try {
+                          mediaLock.wait();
+                        } catch (InterruptedException e) {
+                          e.printStackTrace();
+                        }
+                      }
+                    }
+
+                    URL audioUrl;
+                    InputStream in = null;
+                    FileOutputStream fout = null;
+                    try {
+                      audioUrl = new URL(url);
+                      HttpURLConnection urlConnection =
+                          (HttpURLConnection) audioUrl.openConnection();
+                      BufferedReader br = new BufferedReader(
+                          new InputStreamReader((urlConnection.getInputStream())));
+                      StringBuilder sb = new StringBuilder();
+                      String output;
+                      while ((output = br.readLine()) != null) {
+                        sb.append(output);
+                      }
+                      Log.i(TAG, "play stream: " + sb.toString());
+                      contentPlay(sb.toString());
+
+                    } catch (MalformedURLException e) {
+                      e.printStackTrace();
+                    } catch (IOException e) {
+                      e.printStackTrace();
+                    } finally {
+                      try {
+                        if (in != null && fout != null) {
+                          in.close();
+                          fout.close();
+                        }
+                      } catch (IOException e) {
+                        e.printStackTrace();
+                      }
+                    }
+                  }
+                }
+              };
+
+              audioPlayerHandler.postAtTime(REPLACE_ALL, token, 0);
+
               break;
 
             case PlayPayload.PlayBehavior.ENQUEUE:
               streamList.add(playDirective);
-              if (url.contains("cid:")) {
-                String cid = url.split("cid:")[1];
-                mediaPlay(AudioStreamTest.get(cid));
-              } else {
-                URL audioUrl;
-                InputStream in = null;
-                FileOutputStream fout = null;
-                try {
-                  audioUrl = new URL(url);
-                  HttpURLConnection urlConnection = (HttpURLConnection) audioUrl.openConnection();
-                  in = new BufferedInputStream(urlConnection.getInputStream());
-                  String filePath = "/sdcard/audio.mp3";
-                  fout = new FileOutputStream(filePath);
-                  IOUtils.copy(in, fout);
-                  mediaPlay(filePath);
-
-                } catch (MalformedURLException e) {
-                  e.printStackTrace();
-                } catch (IOException e) {
-                  e.printStackTrace();
-                } finally {
-                  try {
-                    if (in != null && fout != null) {
-                      in.close();
-                      fout.close();
-                    }
-                  } catch (IOException e) {
-                    e.printStackTrace();
-                  }
-                }
-              }
               break;
             case PlayPayload.PlayBehavior.REPLACE_ENQUEUED:
 
@@ -710,36 +827,42 @@ public class PlasmaService extends Service {
   }
 
 
-  public void playWav() {
-    int minBufferSize = AudioTrack.getMinBufferSize(8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
-        AudioFormat.ENCODING_PCM_16BIT);
-    int bufferSize = 512;
-    AudioTrack at =
-        new AudioTrack(AudioManager.STREAM_MUSIC, 8000, AudioFormat.CHANNEL_CONFIGURATION_MONO,
-            AudioFormat.ENCODING_PCM_16BIT, minBufferSize, AudioTrack.MODE_STREAM);
-    String filepath = Environment.getExternalStorageDirectory().getAbsolutePath();
 
-    int i = 0;
-    byte[] s = new byte[bufferSize];
+  // media logic
+  public void mediaPlay(String filePath) {
     try {
-      FileInputStream fin = new FileInputStream(filepath + "/REFERENCE.wav");
-      DataInputStream dis = new DataInputStream(fin);
-
-      at.play();
-      while ((i = dis.read(s, 0, bufferSize)) > -1) {
-        at.write(s, 0, i);
-
-      }
-      at.stop();
-      at.release();
-      dis.close();
-      fin.close();
-
-    } catch (FileNotFoundException e) {
-      e.printStackTrace();
-    } catch (IOException e) {
+      mDialogPlayer.reset();
+      mDialogPlayer.setDataSource(filePath);
+      mDialogPlayer.prepare();
+      mDialogPlayer.start();
+    } catch (IllegalArgumentException | SecurityException | IllegalStateException | IOException e) {
       e.printStackTrace();
     }
   }
+
+  public void contentPlay(String filePath) {
+
+    if (mContentPlayer.isPlaying()) {
+      synchronized (contentLock) {
+        try {
+          contentLock.wait();
+        } catch (InterruptedException e) {
+          e.printStackTrace();
+        }
+      }
+    }
+
+    try {
+      mContentPlayer.reset();
+      mContentPlayer.setDataSource(filePath);
+      mContentPlayer.prepare();
+      mContentPlayer.start();
+    } catch (IllegalArgumentException | SecurityException | IllegalStateException | IOException e) {
+      e.printStackTrace();
+    }
+
+  }
+
+
 
 }
